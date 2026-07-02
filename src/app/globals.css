@@ -1,26 +1,178 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ============================================================
+   Valiant Movement — Design System
+   Brand: Orange · Courage to Lead
+   ============================================================ */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg: #f7f5f2;
+  --color-surface: #ffffff;
+  --color-surface-2: #faf7f3;
+
+  --color-ink: #1a1410;          /* near-black, warm */
+  --color-ink-soft: #423a33;
+  --color-muted: #7a7068;
+  --color-faint: #a8a098;
+
+  --color-line: #ece7e0;
+  --color-line-soft: #f3efe9;
+
+  /* Brand — orange */
+  --color-navy: #1a1410;         /* kept name for headings; now warm near-black */
+  --color-brand: #f7931e;        /* primary orange (from logo) */
+  --color-brand-2: #ff7a18;      /* hover / gradient end */
+  --color-brand-strong: #e07400; /* deep orange for text on light */
+  --color-brand-tint: #fef1e0;   /* soft orange wash */
+
+  --color-accent: #f7931e;
+  --color-amber: #f5a524;
+  --color-green: #1faa59;
+  --color-danger: #e23d4e;
+
+  /* shadcn/ui semantic tokens — mapped onto the Valiant palette so copied
+     shadcn-style primitives (e.g. components/ui/expandable-tabs) theme
+     correctly. `muted` already exists as a foreground gray, so the primitive
+     uses `secondary` (brand tint) for its hover/selected surface. */
+  --color-background: var(--color-surface);          /* #ffffff */
+  --color-foreground: var(--color-ink);              /* near-black */
+  --color-primary: var(--color-brand-strong);        /* deep orange */
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--color-brand-tint);        /* soft orange wash */
+  --color-muted-foreground: var(--color-muted);      /* warm gray text */
+  --color-border: var(--color-line);                 /* hairline */
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Slim scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-faint);
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Live entrance for newly arriving feed/chat items */
+  @keyframes vm-rise {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .animate-rise {
+    animation: vm-rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @keyframes vm-pop {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .animate-pop {
+    animation: vm-pop 0.3s ease both;
+  }
+
+  /* Hide scrollbar for horizontal rails */
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Primary action — orange gradient */
+  .gradient-brand {
+    background-image: linear-gradient(135deg, var(--color-brand) 0%, var(--color-brand-2) 100%);
+  }
+  /* Alias kept so existing markup stays orange */
+  .gradient-navy {
+    background-image: linear-gradient(135deg, var(--color-brand) 0%, var(--color-brand-2) 100%);
+  }
+
+  .text-gradient {
+    background-image: linear-gradient(120deg, var(--color-ink), var(--color-brand-strong) 70%, var(--color-brand));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Form control base */
+  .field {
+    width: 100%;
+    border-radius: 0.85rem;
+    border: 1.5px solid var(--color-line);
+    background: var(--color-surface);
+    /* vertical padding only — horizontal padding is set per-input so the
+       icon/trailing offsets (pl-12 / pr-12) are never overridden */
+    padding-block: 0.85rem;
+    font-size: 0.95rem;
+    color: var(--color-ink);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    outline: none;
+  }
+  .field::placeholder {
+    color: var(--color-faint);
+  }
+  .field:hover {
+    border-color: #ddd5cb;
+  }
+  .field:focus {
+    border-color: var(--color-brand);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-brand) 18%, transparent);
+  }
+  .field:disabled {
+    background: var(--color-surface-2);
+    color: var(--color-muted);
+    cursor: not-allowed;
+  }
+  select.field {
+    appearance: none;
+    cursor: pointer;
+  }
 }
