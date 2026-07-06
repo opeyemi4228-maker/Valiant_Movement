@@ -4,7 +4,7 @@ import { and, asc, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversationMembers, conversations, messages, profiles, users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/session";
-import { hasDb } from "@/lib/env";
+import { usesDb } from "@/lib/env";
 import * as mem from "@/lib/demo-store";
 import { scanMessage } from "@/lib/moderation";
 
@@ -68,7 +68,9 @@ export async function loadChat(): Promise<{
 }> {
   const id = await meId();
   if (!id) return { available: false, conversations: [], members: [] };
-  if (!hasDb()) return mem.loadChat(id);
+  // Demo-session members (slug ids) stay on the in-memory backend even when
+  // a DB is configured — their ids must never reach uuid columns.
+  if (!usesDb(id)) return mem.loadChat(id);
 
   // Other verified members you can message.
   const memberRows = await db
@@ -156,7 +158,7 @@ async function getConversationsFor(id: string): Promise<ChatConversation[]> {
 export async function refreshConversations(): Promise<ChatConversation[]> {
   const id = await meId();
   if (!id) return [];
-  if (!hasDb()) return mem.conversationsFor(id);
+  if (!usesDb(id)) return mem.conversationsFor(id);
   return getConversationsFor(id);
 }
 
@@ -166,7 +168,7 @@ export async function startDirect(otherUserId: string): Promise<{ ok: boolean; c
   const id = await meId();
   if (!id) return { ok: false, error: "Sign in as a registered member to chat." };
   if (otherUserId === id) return { ok: false, error: "You can't message yourself." };
-  if (!hasDb()) return mem.startDirect(id, otherUserId);
+  if (!usesDb(id)) return mem.startDirect(id, otherUserId);
 
   // Existing direct conversation with this person?
   const mine = await db
@@ -214,7 +216,7 @@ async function isMember(conversationId: string, userId: string): Promise<boolean
 export async function getMessages(conversationId: string): Promise<{ ok: boolean; messages: ChatMessageDTO[]; error?: string }> {
   const id = await meId();
   if (!id) return { ok: false, messages: [], error: "unauthenticated" };
-  if (!hasDb()) return mem.getMessages(id, conversationId);
+  if (!usesDb(id)) return mem.getMessages(id, conversationId);
   if (!(await isMember(conversationId, id))) return { ok: false, messages: [], error: "forbidden" };
 
   const rows = await db
@@ -265,7 +267,7 @@ export async function sendMessage(
   // LGA Coordinator automatically (the message is still delivered).
   const hit = scanMessage(body);
 
-  if (!hasDb()) {
+  if (!usesDb(id)) {
     const res = mem.sendMessage(id, conversationId, body, media);
     if (res.ok && res.message && hit.flagged) {
       mem.recordModerationAlert({
@@ -314,7 +316,7 @@ export async function sendMessage(
 export async function markRead(conversationId: string): Promise<void> {
   const id = await meId();
   if (!id) return;
-  if (!hasDb()) {
+  if (!usesDb(id)) {
     mem.markRead(id, conversationId);
     return;
   }

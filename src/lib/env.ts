@@ -21,6 +21,19 @@ export function hasDb(): boolean {
   return env.DATABASE_URL.trim().length > 0;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Routes an action to Postgres only when a DB is configured AND the id in
+ * hand is a DB id (UUID). Demo-store ids are readable slugs ("m_amara",
+ * "c_seed", "demo-member") that must never reach a uuid column — a member
+ * signed in through the demo backend stays on it even after DATABASE_URL is
+ * set, until they log in with a real account.
+ */
+export function usesDb(id: string): boolean {
+  return hasDb() && UUID_RE.test(id);
+}
+
 export function requireEnv(name: keyof typeof env): string {
   const value = env[name];
   if (!value || typeof value !== "string") {
