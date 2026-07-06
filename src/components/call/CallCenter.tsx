@@ -46,6 +46,7 @@ export function CallCenter() {
   // Latest state for the presence loop without re-arming its interval.
   const busyRef = useRef(false);
   const incomingIdRef = useRef<string | null>(null);
+  const handledRef = useRef<Set<string>>(new Set()); // calls already accepted/declined
   useEffect(() => {
     busyRef.current = !!(incoming || outgoing || inCall);
     incomingIdRef.current = incoming?.id ?? null;
@@ -67,13 +68,14 @@ export function CallCenter() {
       if (prevUnread >= 0 && unread > prevUnread) playDing();
       prevUnread = unread;
 
-      // Don't interrupt an active/ringing call with a new incoming banner.
+      // Don't interrupt an active/ringing call with a new incoming banner,
+      // and never re-show a call the user already accepted or declined.
       if (!busyRef.current || incomingIdRef.current) {
-        if (incomingCall && incomingCall.status === "ringing") {
+        if (incomingCall && incomingCall.status === "ringing" && !handledRef.current.has(incomingCall.id)) {
           if (incomingIdRef.current !== incomingCall.id && !inCall && !outgoing) {
             setIncoming(incomingCall);
           }
-        } else if (incomingIdRef.current) {
+        } else if (incomingIdRef.current && (!incomingCall || incomingCall.status !== "ringing")) {
           setIncoming(null); // caller cancelled / it expired
         }
       }
@@ -162,42 +164,49 @@ export function CallCenter() {
     return () => { alive = false; clearInterval(t); };
   }, [inCall]);
 
-  /* -------- actions -------- */
-  async function acceptIncoming() {
-    if (!incoming) return;
-    const sig = await answerCall(incoming.id);
+  /* -------- actions --------
+     Each button updates the UI IMMEDIATELY (optimistic), then tells the
+     server. Never await before dismissing — a slow/failed round-trip must
+     not leave the ring/accept/cancel button feeling dead. */
+  function acceptIncoming() {
+    const call = incoming;
+    if (!call) return;
+    handledRef.current.add(call.id);
     setIncoming(null);
-    if (sig) {
-      setInCall({
-        callId: sig.id,
-        config: {
-          mode: sig.mode,
-          kind: "call",
-          title: sig.callerName,
-          subtitle: "Verified member",
-          participants: [{ name: sig.callerName, color: sig.callerColor }],
-          callId: sig.id,
-          role: "callee",
-        },
-      });
-    }
+    setInCall({
+      callId: call.id,
+      config: {
+        mode: call.mode,
+        kind: "call",
+        title: call.callerName,
+        subtitle: "Verified member",
+        participants: [{ name: call.callerName, color: call.callerColor }],
+        callId: call.id,
+        role: "callee",
+      },
+    });
+    answerCall(call.id).catch(() => flash("Couldn't connect — try again."));
   }
 
-  async function declineIncoming() {
-    if (!incoming) return;
-    await declineCall(incoming.id);
+  function declineIncoming() {
+    const call = incoming;
+    if (!call) return;
+    handledRef.current.add(call.id);
     setIncoming(null);
+    declineCall(call.id).catch(() => {});
   }
 
-  async function cancelOutgoing() {
-    if (outgoing) await hangupCall(outgoing.callId);
+  function cancelOutgoing() {
+    const out = outgoing;
     setOutgoing(null);
     setOutStatus(undefined);
+    if (out) hangupCall(out.callId).catch(() => {});
   }
 
-  async function endInCall() {
-    if (inCall) await hangupCall(inCall.callId);
+  function endInCall() {
+    const c = inCall;
     setInCall(null);
+    if (c) hangupCall(c.callId).catch(() => {});
   }
 
   return (
