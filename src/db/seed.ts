@@ -10,8 +10,76 @@ loadEnvConfig(process.cwd());
 
 import { neon } from "@neondatabase/serverless";
 import { drizzle } from "drizzle-orm/neon-http";
+import { and, eq, inArray } from "drizzle-orm";
 import { NIGERIA } from "../data/nigeria";
-import { lgas, states } from "./schema";
+import { conversationMembers, conversations, lgas, messages, profiles, states, users } from "./schema";
+import { hashPassword } from "../lib/password";
+
+type Db = ReturnType<typeof drizzle>;
+
+/**
+ * Seed the ready-to-use demo members as REAL database accounts so they behave
+ * exactly like registered users (persistent, cross-device chat & calls).
+ * Sign in with either email + password "Valiant2026". Idempotent.
+ */
+const DEMO_MEMBERS = [
+  { email: "member@valiantmovement.com", fullName: "Chidi Okafor", username: "chidi_okafor" },
+  { email: "amara@valiantmovement.com", fullName: "Amara Eze", username: "amara_eze" },
+];
+const DEMO_PASSWORD = "Valiant2026";
+
+async function seedDemoMembers(db: Db) {
+  const passwordHash = await hashPassword(DEMO_PASSWORD);
+  const ids: string[] = [];
+
+  for (const m of DEMO_MEMBERS) {
+    const [u] = await db
+      .insert(users)
+      .values({ email: m.email, passwordHash, emailVerified: true, status: "active" })
+      .onConflictDoUpdate({
+        target: users.email,
+        set: { passwordHash, emailVerified: true, status: "active" },
+      })
+      .returning({ id: users.id });
+    ids.push(u.id);
+    await db
+      .insert(profiles)
+      .values({ userId: u.id, fullName: m.fullName, username: m.username })
+      .onConflictDoNothing();
+  }
+
+  // A starter direct conversation between them (only if one doesn't exist yet).
+  const [a, b] = ids;
+  const mine = await db
+    .select({ c: conversationMembers.conversationId })
+    .from(conversationMembers)
+    .where(eq(conversationMembers.userId, a));
+  const aConvos = mine.map((r) => r.c);
+  let convoId: string | null = null;
+  if (aConvos.length) {
+    const [shared] = await db
+      .select({ c: conversationMembers.conversationId })
+      .from(conversationMembers)
+      .where(and(eq(conversationMembers.userId, b), inArray(conversationMembers.conversationId, aConvos)))
+      .limit(1);
+    convoId = shared?.c ?? null;
+  }
+  if (!convoId) {
+    const [conv] = await db.insert(conversations).values({ type: "direct" }).returning({ id: conversations.id });
+    convoId = conv.id;
+    await db.insert(conversationMembers).values([
+      { conversationId: convoId, userId: a },
+      { conversationId: convoId, userId: b },
+    ]);
+    await db.insert(messages).values({
+      conversationId: convoId,
+      senderId: b,
+      body: "Welcome to Valiant! 🦅 Message me back — it's live.",
+      deliveredAt: new Date(),
+    });
+  }
+  console.log(`✓ Seeded ${DEMO_MEMBERS.length} demo members (login with password "${DEMO_PASSWORD}").`);
+}
 
 async function main() {
   const url = process.env.DATABASE_URL;
@@ -42,6 +110,8 @@ async function main() {
   }
 
   console.log(`✓ Seeded ${stateCount} states and ${lgaCount} LGAs.`);
+
+  await seedDemoMembers(db);
 }
 
 main()

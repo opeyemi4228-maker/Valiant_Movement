@@ -54,31 +54,31 @@ export interface CurrentUser {
 
 /** Returns the signed-in user (validating the session token + expiry), or null. */
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  // In-memory member (demo backend, no database). Real DB id-shaped so chat works.
-  const local = await getLocalMember();
-  if (local) {
-    return {
-      id: local.id,
-      email: local.email,
-      status: "active",
-      emailVerified: true,
-      fullName: local.fullName,
-    };
-  }
-
-  // When there's no database, only the in-memory store provides members.
-  if (!hasDb()) return null;
-
-  // Demo member resolves without the database (mirrors the Super Admin path).
-  const demo = await getDemoMemberSession();
-  if (demo) {
-    return {
-      id: "demo-member",
-      email: demo.email || DEMO_MEMBER_EMAIL,
-      status: demo.status,
-      emailVerified: true,
-      fullName: demo.fullName,
-    };
+  // Demo / in-memory sessions apply ONLY when there's no database. With a DB
+  // configured, the demo accounts are seeded as real users, so we ignore any
+  // stale in-memory cookies and use normal DB sessions below.
+  if (!hasDb()) {
+    const local = await getLocalMember();
+    if (local) {
+      return {
+        id: local.id,
+        email: local.email,
+        status: "active",
+        emailVerified: true,
+        fullName: local.fullName,
+      };
+    }
+    const demo = await getDemoMemberSession();
+    if (demo) {
+      return {
+        id: "demo-member",
+        email: demo.email || DEMO_MEMBER_EMAIL,
+        status: demo.status,
+        emailVerified: true,
+        fullName: demo.fullName,
+      };
+    }
+    return null;
   }
 
   const cookieStore = await cookies();

@@ -206,8 +206,10 @@ export async function loginMember(
     return { ok: false, error: "Incorrect email or password." };
   }
 
-  // Ready-to-use demo member — works without the database (see demo-member.ts).
-  if (isDemoMember(parsed.data.email, parsed.data.password)) {
+  // Ready-to-use demo member — only without a database. With a DB the demo
+  // accounts are seeded as real users (see db/seed.ts) and authenticate below,
+  // so they persist and work across devices like any registered account.
+  if (!hasDb() && isDemoMember(parsed.data.email, parsed.data.password)) {
     await createDemoMemberSession();
     return { ok: true, role: "member" };
   }
