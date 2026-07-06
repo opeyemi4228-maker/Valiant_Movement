@@ -22,8 +22,10 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
   const [needsMic, setNeedsMic] = useState(false); // permission blocked → tap to allow
   const [supported, setSupported] = useState(false);
   const [armNonce, setArmNonce] = useState(0); // bump to (re)start the listener
+  const [voiceErr, setVoiceErr] = useState<string | null>(null); // e.g. network/mic issue
   const wakeRef = useRef<SpeechRecognitionLike | null>(null);
   const lastFireRef = useRef(0);
+  const netErrRef = useRef(0); // consecutive "network" errors before we surface it
 
   useEffect(() => {
     // Client-only capability check — deferred to avoid an SSR hydration
@@ -86,6 +88,9 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
       recog.interimResults = true;
       recog.lang = "en-US";
       recog.onresult = (e: SREvent) => {
+        // Any transcript means the speech service is reachable and working.
+        netErrRef.current = 0;
+        setVoiceErr(null);
         for (let i = e.resultIndex; i < e.results.length; i++) {
           if (WAKE.test(e.results[i][0].transcript)) {
             if (Date.now() - lastFireRef.current < 2000) return; // debounce repeats
@@ -111,7 +116,22 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
           setNeedsMic(true);
           return;
         }
-        // "no-speech"/"aborted"/"network" etc. — just restart after a beat.
+        if (err === "audio-capture") {
+          setVoiceErr("No microphone was detected.");
+          restart(1500);
+          return;
+        }
+        if (err === "network") {
+          // Chrome's recognition runs on Google's servers — a blocked/throttled
+          // network fails here repeatedly. Surface it instead of looping silently.
+          netErrRef.current += 1;
+          if (netErrRef.current >= 3) {
+            setVoiceErr("Voice can’t reach the speech service on this network. Tap the orb to type instead.");
+          }
+          restart(1000);
+          return;
+        }
+        // "no-speech"/"aborted" etc. — normal; just restart after a beat.
         restart(500);
       };
       current = recog;
@@ -149,6 +169,8 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
     }
     const ok = await requestMic();
     setNeedsMic(!ok);
+    setVoiceErr(null);
+    netErrRef.current = 0;
     setWakeOn(true);
     setArmNonce((n) => n + 1);
   }
@@ -190,24 +212,33 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
           {/* wake toggle */}
           {supported && (
             <button
-              onClick={toggleWake}
+              onClick={() => {
+                if (voiceErr) { netErrRef.current = 0; setVoiceErr(null); setArmNonce((n) => n + 1); return; }
+                toggleWake();
+              }}
               title={
-                wakeOn && needsMic
+                voiceErr
+                  ? `${voiceErr} (tap to retry)`
+                  : wakeOn && needsMic
                   ? "Tap to allow your microphone"
                   : wakeOn
                   ? "Stop listening for “Hey Valiant AI”"
                   : "Listen for “Hey Valiant AI”"
               }
-              className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-md transition ${
-                wakeOn && needsMic
+              className={`flex max-w-[220px] items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-md transition ${
+                voiceErr
+                  ? "bg-[var(--color-danger)] text-white"
+                  : wakeOn && needsMic
                   ? "bg-[var(--color-amber)] text-white"
                   : wakeOn
                   ? "bg-[var(--color-navy)] text-white"
                   : "border border-[var(--color-line)] bg-white text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
               }`}
             >
-              {wakeOn ? <Ear className="h-3.5 w-3.5" /> : <EarOff className="h-3.5 w-3.5" />}
-              {wakeOn && needsMic ? "Allow mic" : wakeOn ? "Listening" : "Wake word"}
+              {voiceErr || !wakeOn ? <EarOff className="h-3.5 w-3.5 shrink-0" /> : <Ear className="h-3.5 w-3.5 shrink-0" />}
+              <span className="truncate">
+                {voiceErr ? "Voice off" : wakeOn && needsMic ? "Allow mic" : wakeOn ? "Listening" : "Wake word"}
+              </span>
             </button>
           )}
 

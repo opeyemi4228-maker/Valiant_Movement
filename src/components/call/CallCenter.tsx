@@ -136,12 +136,27 @@ export function CallCenter() {
   useEffect(() => {
     if (!inCall) return;
     let alive = true;
+    let misses = 0;
     const t = setInterval(async () => {
-      const sig = await getCallStatus(inCall.callId);
+      let sig: CallSignal | null;
+      try {
+        sig = await getCallStatus(inCall.callId);
+      } catch {
+        return; // network blip — keep the call up
+      }
       if (!alive) return;
-      if (!sig || sig.status === "ended" || sig.status === "declined" || sig.status === "missed") {
+      if (sig && (sig.status === "ended" || sig.status === "declined" || sig.status === "missed")) {
         clearInterval(t);
         setInCall(null); // the other party hung up — close automatically
+        return;
+      }
+      // A missing signal is usually transient (serverless lag / brief store
+      // miss). Only give up after several consecutive misses (~9s) so a live
+      // call is never cut short by a single failed poll.
+      if (!sig) {
+        if (++misses >= 6) { clearInterval(t); setInCall(null); }
+      } else {
+        misses = 0;
       }
     }, 1500);
     return () => { alive = false; clearInterval(t); };

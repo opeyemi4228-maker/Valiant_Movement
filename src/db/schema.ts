@@ -7,7 +7,9 @@
  */
 import { relations, sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
+  check,
   date,
   index,
   integer,
@@ -21,6 +23,14 @@ import {
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
+import { uuidv7 } from "./id";
+
+/**
+ * Primary keys are UUIDv7: generated app-side (time-ordered, keeps B-tree
+ * inserts append-only at scale) with gen_random_uuid() as the DB-side
+ * fallback for raw SQL inserts. See src/db/id.ts.
+ */
+const pk = () => uuid("id").primaryKey().defaultRandom().$defaultFn(uuidv7);
 
 /* ----------------------------- enums ----------------------------- */
 
@@ -66,7 +76,7 @@ export const conversationType = pgEnum("conversation_type", ["direct", "group"])
 /* --------------------------- geo hierarchy --------------------------- */
 
 export const states = pgTable("states", {
-  id: uuid("id").primaryKey().defaultRandom(),
+  id: pk(),
   name: text("name").notNull().unique(),
   capital: text("capital"),
   zone: text("zone"),
@@ -75,7 +85,7 @@ export const states = pgTable("states", {
 export const lgas = pgTable(
   "lgas",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     stateId: uuid("state_id")
       .notNull()
       .references(() => states.id, { onDelete: "cascade" }),
@@ -87,7 +97,7 @@ export const lgas = pgTable(
 export const wards = pgTable(
   "wards",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     lgaId: uuid("lga_id")
       .notNull()
       .references(() => lgas.id, { onDelete: "cascade" }),
@@ -100,31 +110,37 @@ export const wards = pgTable(
 export const pollingUnits = pgTable(
   "polling_units",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     wardId: uuid("ward_id")
       .notNull()
       .references(() => wards.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     code: text("code"),
   },
-  (t) => [index("polling_units_ward_idx").on(t.wardId)],
+  (t) => [
+    unique().on(t.wardId, t.code),
+    index("polling_units_ward_idx").on(t.wardId),
+  ],
 );
 
 /* ----------------------------- identity ----------------------------- */
 
 export const users = pgTable("users", {
-  id: uuid("id").primaryKey().defaultRandom(),
+  id: pk(),
   email: text("email").notNull().unique(), // stored lowercased
   phone: varchar("phone", { length: 20 }).unique(),
   passwordHash: text("password_hash").notNull(),
   emailVerified: boolean("email_verified").notNull().default(false),
   status: userStatus("status").notNull().default("pending"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
 });
 
 export const identities = pgTable("identities", {
-  id: uuid("id").primaryKey().defaultRandom(),
+  id: pk(),
   userId: uuid("user_id")
     .notNull()
     .unique()
@@ -142,29 +158,37 @@ export const identities = pgTable("identities", {
   source: text("source").default("manual"), // manual | nimc_sync
 });
 
-export const profiles = pgTable("profiles", {
-  userId: uuid("user_id")
-    .primaryKey()
-    .references(() => users.id, { onDelete: "cascade" }),
-  fullName: text("full_name").notNull(),
-  username: text("username").unique(),
-  avatarUrl: text("avatar_url"),
-  bio: text("bio"),
-  stateId: uuid("state_id").references(() => states.id),
-  lgaId: uuid("lga_id").references(() => lgas.id),
-  // ward & polling unit captured as text until the official INEC dataset is
-  // loaded into the `wards` / `polling_units` tables, then promoted to FKs.
-  ward: text("ward"),
-  pollingUnit: text("polling_unit"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const profiles = pgTable(
+  "profiles",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    fullName: text("full_name").notNull(),
+    username: text("username").unique(),
+    avatarUrl: text("avatar_url"),
+    bio: text("bio"),
+    stateId: uuid("state_id").references(() => states.id),
+    lgaId: uuid("lga_id").references(() => lgas.id),
+    // ward & polling unit captured as text until the official INEC dataset is
+    // loaded into the `wards` / `polling_units` tables, then promoted to FKs.
+    ward: text("ward"),
+    pollingUnit: text("polling_unit"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // geo rollups: "members in my state / LGA"
+    index("profiles_state_idx").on(t.stateId),
+    index("profiles_lga_idx").on(t.lgaId),
+  ],
+);
 
 /* --------------------- sessions & verification --------------------- */
 
 export const sessions = pgTable(
   "sessions",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -174,13 +198,17 @@ export const sessions = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("sessions_user_idx").on(t.userId)],
+  (t) => [
+    index("sessions_user_idx").on(t.userId),
+    // batch-purging expired sessions must not scan the table
+    index("sessions_expires_idx").on(t.expiresAt),
+  ],
 );
 
 export const emailVerifications = pgTable(
   "email_verifications",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -189,7 +217,13 @@ export const emailVerifications = pgTable(
     consumedAt: timestamp("consumed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("email_verifications_user_idx").on(t.userId)],
+  (t) => [
+    // partial: only live tokens are looked up; consumed rows drop out of the index
+    index("email_verifications_user_idx")
+      .on(t.userId)
+      .where(sql`consumed_at IS NULL`),
+    index("email_verifications_expires_idx").on(t.expiresAt),
+  ],
 );
 
 /* ----------------------- NIN sync (listener) ----------------------- */
@@ -197,7 +231,7 @@ export const emailVerifications = pgTable(
 export const ninSyncJobs = pgTable(
   "nin_sync_jobs",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -210,31 +244,42 @@ export const ninSyncJobs = pgTable(
   (t) => [index("nin_jobs_status_idx").on(t.status, t.scheduledAt)],
 );
 
-export const ninVerificationLog = pgTable("nin_verification_log", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  userId: uuid("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  requestRef: text("request_ref"),
-  result: text("result"), // verified | mismatch | not_found | error
-  rawMeta: jsonb("raw_meta"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const ninVerificationLog = pgTable(
+  "nin_verification_log",
+  {
+    id: pk(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    requestRef: text("request_ref"),
+    result: text("result"), // verified | mismatch | not_found | error
+    rawMeta: jsonb("raw_meta"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("nin_log_user_idx").on(t.userId, t.createdAt.desc())],
+);
 
 /* ----------------------------- communities ----------------------------- */
 
-export const communities = pgTable("communities", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  name: text("name").notNull(),
-  slug: text("slug").notNull().unique(),
-  description: text("description"),
-  scope: communityScope("scope").notNull(),
-  scopeRefId: uuid("scope_ref_id"),
-  visibility: communityVisibility("visibility").notNull().default("public"),
-  memberCount: integer("member_count").notNull().default(0),
-  createdBy: uuid("created_by").references(() => users.id),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const communities = pgTable(
+  "communities",
+  {
+    id: pk(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull().unique(),
+    description: text("description"),
+    scope: communityScope("scope").notNull(),
+    scopeRefId: uuid("scope_ref_id"),
+    visibility: communityVisibility("visibility").notNull().default("public"),
+    memberCount: integer("member_count").notNull().default(0),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // geo auto-join: "find the community for this ward/LGA/state"
+    index("communities_scope_idx").on(t.scope, t.scopeRefId),
+  ],
+);
 
 export const communityMembers = pgTable(
   "community_members",
@@ -259,12 +304,14 @@ export const communityMembers = pgTable(
 export const posts = pgTable(
   "posts",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     authorId: uuid("author_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     communityId: uuid("community_id").references(() => communities.id),
-    parentId: uuid("parent_id"),
+    parentId: uuid("parent_id").references((): AnyPgColumn => posts.id, {
+      onDelete: "cascade",
+    }),
     body: text("body"),
     media: jsonb("media").default(sql`'[]'::jsonb`),
     likeCount: integer("like_count").notNull().default(0),
@@ -273,8 +320,14 @@ export const posts = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    index("posts_author_idx").on(t.authorId, t.createdAt),
-    index("posts_community_idx").on(t.communityId, t.createdAt),
+    // (…, created_at DESC, id DESC) supports keyset pagination with a stable
+    // tiebreaker — never OFFSET at this table's size
+    index("posts_author_idx").on(t.authorId, t.createdAt.desc(), t.id.desc()),
+    index("posts_community_idx").on(t.communityId, t.createdAt.desc(), t.id.desc()),
+    // reply threads; partial keeps top-level posts out of the index
+    index("posts_parent_idx")
+      .on(t.parentId, t.createdAt)
+      .where(sql`parent_id IS NOT NULL`),
   ],
 );
 
@@ -290,7 +343,11 @@ export const postReactions = pgTable(
     type: text("type").notNull().default("like"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.postId, t.userId, t.type] })],
+  (t) => [
+    primaryKey({ columns: [t.postId, t.userId, t.type] }),
+    // "posts I liked" — reverse lookup the PK can't serve
+    index("post_reactions_user_idx").on(t.userId, t.createdAt.desc()),
+  ],
 );
 
 export const follows = pgTable(
@@ -304,13 +361,18 @@ export const follows = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.followerId, t.followeeId] })],
+  (t) => [
+    primaryKey({ columns: [t.followerId, t.followeeId] }),
+    // follower lists / follower counts — reverse of the PK ordering
+    index("follows_followee_idx").on(t.followeeId, t.createdAt.desc()),
+    check("follows_no_self", sql`follower_id <> followee_id`),
+  ],
 );
 
 /* ------------------------------- chat ------------------------------- */
 
 export const conversations = pgTable("conversations", {
-  id: uuid("id").primaryKey().defaultRandom(),
+  id: pk(),
   type: conversationType("type").notNull().default("direct"),
   title: text("title"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -327,13 +389,17 @@ export const conversationMembers = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     lastReadAt: timestamp("last_read_at", { withTimezone: true }),
   },
-  (t) => [primaryKey({ columns: [t.conversationId, t.userId] })],
+  (t) => [
+    primaryKey({ columns: [t.conversationId, t.userId] }),
+    // "list my conversations" — reverse of the PK ordering
+    index("conversation_members_user_idx").on(t.userId),
+  ],
 );
 
 export const messages = pgTable(
   "messages",
   {
-    id: uuid("id").primaryKey().defaultRandom(),
+    id: pk(),
     conversationId: uuid("conversation_id")
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
@@ -345,7 +411,42 @@ export const messages = pgTable(
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("messages_conversation_idx").on(t.conversationId, t.createdAt)],
+  (t) => [
+    index("messages_conversation_idx").on(
+      t.conversationId,
+      t.createdAt.desc(),
+      t.id.desc(),
+    ),
+  ],
+);
+
+/* ---- calls: status + WebRTC signaling, shared across serverless instances ---- */
+export const callSignals = pgTable(
+  "call_signals",
+  {
+    id: pk(),
+    callerId: uuid("caller_id").notNull().references(() => users.id),
+    calleeId: uuid("callee_id").notNull().references(() => users.id),
+    callerName: text("caller_name").notNull(),
+    callerColor: text("caller_color").notNull(),
+    calleeName: text("callee_name").notNull(),
+    mode: text("mode").notNull(), // "voice" | "video"
+    status: text("status").notNull().default("ringing"), // ringing|accepted|declined|missed|ended
+    offer: text("offer"),
+    answer: text("answer"),
+    iceCaller: jsonb("ice_caller").notNull().default(sql`'[]'::jsonb`),
+    iceCallee: jsonb("ice_callee").notNull().default(sql`'[]'::jsonb`),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    index("call_signals_callee_idx").on(t.calleeId, t.status),
+    // signaling rows are ephemeral; this drives the stale-call sweeper
+    index("call_signals_updated_idx").on(t.updatedAt),
+  ],
 );
 
 /* ----------------------------- relations ----------------------------- */

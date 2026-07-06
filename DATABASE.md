@@ -299,3 +299,128 @@ CREATE TABLE nin_verification_log (
 5. Listener Agent verifies the NIN out-of-band and flips
    `identities.verification_status='verified'`, syncing legal name / DOB.
 6. User is auto-joined to their polling-unit / ward / LGA / state communities.
+
+---
+
+## 8. Scaling to 200M+ users
+
+Nigeria has ~220M people; the schema is built so nothing has to be redesigned
+on the way there. The principles below are already implemented in
+`src/db/schema.ts`; the roadmap items are staged so each is adopted only when
+its trigger is hit.
+
+### 8.1 Already implemented (day one)
+
+**Time-ordered primary keys (UUIDv7).** All PKs are UUIDv7, generated app-side
+(`src/db/id.ts`), with `gen_random_uuid()` kept as the DB-side fallback.
+Random v4 UUIDs scatter inserts across the whole B-tree — at hundreds of
+millions of rows every insert dirties a random index page (write
+amplification, buffer-cache misses, WAL bloat). v7 keys are
+millisecond-prefixed, so inserts append at the right edge like a `bigserial`
+while staying globally unique and unguessable.
+
+**Keyset pagination, never OFFSET.** `OFFSET n` reads and discards `n` rows;
+at feed scale that's a table scan per page. Hot list indexes end in
+`(created_at DESC, id DESC)` so queries paginate with
+`WHERE (created_at, id) < ($cursor_ts, $cursor_id) ORDER BY created_at DESC, id DESC LIMIT 50`
+— constant-time regardless of depth. UUIDv7 ids make the tiebreaker
+time-consistent.
+
+**Both directions of every relationship are indexed.** Composite PKs only
+serve one lookup direction; the reverse lookups each have a dedicated index:
+`follows (followee_id)` (follower lists), `conversation_members (user_id)`
+("my chats"), `post_reactions (user_id)` ("posts I liked"),
+`posts (parent_id) WHERE parent_id IS NOT NULL` (reply threads),
+`profiles (state_id)` / `(lga_id)` (geo rollups),
+`communities (scope, scope_ref_id)` (geo auto-join).
+
+**Ephemeral data can be purged without scans.** `sessions (expires_at)`,
+`email_verifications (expires_at)` and `call_signals (updated_at)` are indexed
+so sweeper jobs delete in small indexed batches
+(`DELETE ... WHERE expires_at < now() LIMIT 10_000` in a loop). Run sweepers
+from a cron (Vercel Cron / worker), never inline in requests.
+
+**Partial indexes for hot subsets.** Live email tokens
+(`WHERE consumed_at IS NULL`) and reply posts (`WHERE parent_id IS NOT NULL`)
+are indexed as partial indexes — the index stays small no matter how large the
+table grows.
+
+**Integrity is enforced in the database, not just the app:**
+`follows_no_self` CHECK, `polling_units UNIQUE (ward_id, code)`, and a real FK
+on `posts.parent_id` (cascade delete of reply subtrees).
+
+### 8.2 Connections (critical on serverless)
+
+Serverless functions fan out to thousands of concurrent instances; raw
+Postgres caps out at a few hundred connections. The app uses the **Neon HTTP
+driver** (`drizzle-orm/neon-http`) — each query is a stateless HTTP request
+through Neon's proxy, so there is no connection pool to exhaust. Rules:
+
+- Multi-statement atomic writes use `db.batch([...])` (single HTTP round-trip,
+  atomic on the server).
+- If a TCP/session driver is ever introduced (e.g. `pg` for a long-lived
+  worker like the NIN Listener), it must use the **pooled** connection string
+  (`...-pooler.neon.tech`) — PgBouncer in transaction mode.
+- Set `statement_timeout` (e.g. 10s) and `idle_in_transaction_session_timeout`
+  on the app role so one bad query can't pile up.
+
+### 8.3 Denormalized counters — staged plan
+
+`like_count` / `reply_count` / `member_count` are updated inline today, which
+is correct and fine to ~1M users. A viral post turns its counter row into a
+lock hotspot. Triggers, in order of adoption:
+
+1. **Now → first hotspots:** keep inline `UPDATE ... SET x = x + 1`; it's a
+   single-row atomic increment, no read-modify-write races.
+2. **Hotspot stage:** buffer increments in Redis
+   (`INCR post:{id}:likes`), flush to Postgres every few seconds from a
+   worker. Reads take counts from Redis with Postgres as fallback.
+3. **Full scale:** counters become materialized aggregates recomputed from the
+   reaction/member tables by scheduled jobs; the columns become caches with a
+   staleness budget instead of sources of truth.
+
+### 8.4 Table growth — partitioning roadmap
+
+Row-count triggers, not calendar dates. Postgres handles single tables into
+the low billions of rows when indexes fit access patterns; partition when the
+table's *maintenance* (vacuum, index rebuilds) hurts, not before.
+
+| Table | Expected shape at 200M users | Plan when >~500M rows |
+|---|---|---|
+| `messages` | largest table by far | range-partition by `created_at` (monthly). Old partitions are cold — detach + archive to object storage |
+| `posts` | second largest | range-partition by `created_at`; feed queries always carry a time cursor so partition pruning applies |
+| `post_reactions` | wide but shallow rows | hash-partition by `post_id` |
+| `sessions`, `email_verifications`, `call_signals` | steady-state small | never — sweepers keep them bounded |
+| `users`, `identities`, `profiles` | capped at ~220M rows | no partitioning needed; single-row PK lookups stay O(log n) |
+
+Partition DDL is raw SQL (Drizzle doesn't model partitioned tables) — when the
+trigger hits, the table is recreated as partitioned in a custom migration and
+the schema file is unchanged from the app's point of view.
+
+### 8.5 Read path & caching
+
+- **Read replicas** (Neon read replicas / standby Postgres): route feed reads,
+  profile views, and community listings to replicas; only auth and writes hit
+  the primary. Tolerate ~100ms replica lag everywhere except session checks.
+- **Redis** in front of Postgres for: sessions (token → user, TTL = session
+  expiry), presence/typing, rate-limit counters, and the hot-counter buffer
+  from §8.3.
+- **Fan-out on read** for the home feed (query followees' recent posts via
+  `posts_author_idx`) until follower graphs get heavy; move top accounts to
+  fan-out-on-write (precomputed timeline lists in Redis) only when p99 feed
+  latency demands it.
+- **Media never touches Postgres** — object storage + CDN; the DB stores URLs
+  and metadata (already the case: `media JSONB`).
+
+### 8.6 Operational guardrails
+
+- Migrations that add indexes to big tables must use
+  `CREATE INDEX CONCURRENTLY` (hand-edit the generated migration; it takes no
+  write lock).
+- Autovacuum: lower `autovacuum_vacuum_scale_factor` (e.g. 0.02) on
+  `messages`, `posts`, `sessions` once they're large — the default 20%
+  threshold means millions of dead tuples between vacuums.
+- Every list endpoint takes a cursor + bounded `LIMIT` (≤100) at the API
+  layer; no unbounded reads.
+- `pg_stat_statements` on from day one; alert on any query whose mean time
+  crosses 50ms.

@@ -175,12 +175,28 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
     let iceCallerIdx = 0;
     let iceCalleeIdx = 0;
 
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: "stun:stun.l.google.com:19302" },
-        { urls: "stun:stun1.l.google.com:19302" },
-      ],
-    });
+    // STUN discovers your public address; TURN relays media when a direct path
+    // is blocked by NAT/firewalls (essential for calls across different
+    // networks). Override with NEXT_PUBLIC_TURN_URL/USERNAME/CREDENTIAL in
+    // production; otherwise a free public TURN keeps calls connecting.
+    const iceServers: RTCIceServer[] = [
+      { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+    ];
+    const turnUrl = process.env.NEXT_PUBLIC_TURN_URL;
+    if (turnUrl) {
+      iceServers.push({
+        urls: turnUrl.split(",").map((u) => u.trim()),
+        username: process.env.NEXT_PUBLIC_TURN_USERNAME,
+        credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL,
+      });
+    } else {
+      iceServers.push(
+        { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+        { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+        { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
+      );
+    }
+    const pc = new RTCPeerConnection({ iceServers });
     pcRef.current = pc;
 
     pc.onicecandidate = (e) => {
