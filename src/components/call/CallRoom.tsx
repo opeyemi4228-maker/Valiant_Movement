@@ -196,7 +196,9 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
         { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" },
       );
     }
-    const pc = new RTCPeerConnection({ iceServers });
+    // iceCandidatePoolSize pre-gathers candidates so they're ready the moment
+    // the offer/answer is set — shaves time off the connection.
+    const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 4 });
     pcRef.current = pc;
 
     pc.onicecandidate = (e) => {
@@ -265,12 +267,18 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
       }
     })();
 
-    const poll = setInterval(async () => {
+    // Adaptive signaling poll: fast (300ms) while connecting so the offer →
+    // answer → ICE handshake completes in well under a second per step, then
+    // ramp down to a slow trickle once media is flowing. Runs immediately.
+    let pollDelay = 300;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    const pollOnce = async () => {
       if (!alive) return;
       let sig;
       try {
         sig = await getSignal(callId);
       } catch {
+        if (alive) pollTimer = setTimeout(pollOnce, pollDelay);
         return;
       }
       try {
@@ -303,11 +311,15 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
           else iceCallerIdx = idx;
         }
       } catch { /* transient signaling error */ }
-    }, 800);
+      // Once connected, keep only a slow trickle for late candidates.
+      if (pc.connectionState === "connected") pollDelay = 2500;
+      if (alive) pollTimer = setTimeout(pollOnce, pollDelay);
+    };
+    pollOnce();
 
     return () => {
       alive = false;
-      clearInterval(poll);
+      if (pollTimer) clearTimeout(pollTimer);
       pc.onicecandidate = null;
       pc.ontrack = null;
       pc.onconnectionstatechange = null;

@@ -130,7 +130,7 @@ export function CallCenter() {
         setOutStatus(sig.status === "declined" ? "Call declined" : sig.status === "missed" ? "No answer" : "Call ended");
         setTimeout(() => { if (alive) { setOutgoing(null); setOutStatus(undefined); } }, 1800);
       }
-    }, 1500);
+    }, 600); // poll pickup quickly so the caller enters the room right after accept
     return () => { alive = false; clearInterval(t); };
   }, [outgoing]);
 
