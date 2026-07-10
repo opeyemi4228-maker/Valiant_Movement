@@ -7,6 +7,7 @@ import { generateToken, hashToken } from "./tokens";
 import { DEMO_MEMBER_EMAIL, getDemoMemberSession } from "./demo-member";
 import { hasDb } from "./env";
 import { getLocalMember } from "./demo-store";
+import { withRetry } from "./retry";
 
 const COOKIE = "vm_session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
@@ -85,24 +86,27 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const token = cookieStore.get(COOKIE)?.value;
   if (!token) return null;
 
-  const rows = await db
-    .select({
-      id: users.id,
-      email: users.email,
-      status: users.status,
-      emailVerified: users.emailVerified,
-      fullName: profiles.fullName,
-    })
-    .from(sessions)
-    .innerJoin(users, eq(sessions.userId, users.id))
-    .leftJoin(profiles, eq(profiles.userId, users.id))
-    .where(
-      and(
-        eq(sessions.tokenHash, hashToken(token)),
-        gt(sessions.expiresAt, new Date()),
-      ),
-    )
-    .limit(1);
+  // Retry the lookup so a Neon cold-start blip doesn't crash the page.
+  const rows = await withRetry(() =>
+    db
+      .select({
+        id: users.id,
+        email: users.email,
+        status: users.status,
+        emailVerified: users.emailVerified,
+        fullName: profiles.fullName,
+      })
+      .from(sessions)
+      .innerJoin(users, eq(sessions.userId, users.id))
+      .leftJoin(profiles, eq(profiles.userId, users.id))
+      .where(
+        and(
+          eq(sessions.tokenHash, hashToken(token)),
+          gt(sessions.expiresAt, new Date()),
+        ),
+      )
+      .limit(1),
+  );
 
   return rows[0] ?? null;
 }
