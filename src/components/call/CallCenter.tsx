@@ -45,6 +45,7 @@ export function CallCenter() {
 
   // Latest state for the presence loop without re-arming its interval.
   const busyRef = useRef(false);
+  const startingRef = useRef(false); // synchronous latch: a call is being placed
   const incomingIdRef = useRef<string | null>(null);
   const handledRef = useRef<Set<string>>(new Set()); // calls already accepted/declined
   useEffect(() => {
@@ -90,14 +91,21 @@ export function CallCenter() {
   useEffect(() => {
     const onStart = async (e: Event) => {
       const d = (e as CustomEvent<StartCallDetail>).detail;
-      if (busyRef.current) return;
-      const res = await startCall(d.calleeId, d.mode);
-      if (!res.ok || !res.call) {
-        flash(res.error ?? "Couldn't start the call.");
-        return;
+      // Latch synchronously so 20 rapid clicks place exactly ONE call — busyRef
+      // only flips after the round-trip, which is too late to dedupe.
+      if (busyRef.current || startingRef.current) return;
+      startingRef.current = true;
+      try {
+        const res = await startCall(d.calleeId, d.mode);
+        if (!res.ok || !res.call) {
+          flash(res.error ?? "Couldn't start the call.");
+          return;
+        }
+        setOutStatus(undefined);
+        setOutgoing({ callId: res.call.id, name: d.name, color: d.color, mode: d.mode });
+      } finally {
+        startingRef.current = false;
       }
-      setOutStatus(undefined);
-      setOutgoing({ callId: res.call.id, name: d.name, color: d.color, mode: d.mode });
     };
     window.addEventListener("valiant-call:start", onStart);
     return () => window.removeEventListener("valiant-call:start", onStart);

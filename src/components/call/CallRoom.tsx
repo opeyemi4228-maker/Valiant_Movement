@@ -222,6 +222,10 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
 
     const gUM = (c: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(c);
 
+    // The callee must not answer until its own mic/camera is ready, otherwise
+    // it answers with no tracks and the caller hears/sees nothing.
+    let localReady = false;
+
     (async () => {
       let stream: MediaStream | null = null;
       try {
@@ -244,17 +248,19 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
         streamRef.current = stream;
         camTrackRef.current = stream.getVideoTracks()[0] ?? null;
         if (videoRef.current && stream.getVideoTracks().length) videoRef.current.srcObject = stream;
-        for (const t of stream.getTracks()) {
-          const sender = pc.addTrack(t, stream);
-          if (t.kind === "video") videoSenderRef.current = sender;
-        }
       }
       if (isVideo && (!stream || stream.getVideoTracks().length === 0)) setCamOn(false);
 
-      // Only the caller defines the media lines. Guarantee a video sender (for
-      // screen-share) and an audio line even if our own devices failed. The
-      // callee stays passive and lets setRemoteDescription() build its lines.
+      // The CALLER attaches its tracks and makes the offer now. The CALLEE
+      // defers attaching its tracks until after it applies the offer (below),
+      // so both sides' media lines line up and audio/video flow both ways.
       if (role === "caller") {
+        if (stream) {
+          for (const t of stream.getTracks()) {
+            const sender = pc.addTrack(t, stream);
+            if (t.kind === "video") videoSenderRef.current = sender;
+          }
+        }
         if (!videoSenderRef.current) {
           videoSenderRef.current = pc.addTransceiver("video", { direction: "sendrecv" }).sender;
         }
@@ -265,6 +271,7 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
         await pc.setLocalDescription(offer);
         await sendOffer(callId, JSON.stringify(offer));
       }
+      localReady = true;
     })();
 
     // Adaptive signaling poll: fast (300ms) while connecting so the offer →
@@ -282,15 +289,24 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
         return;
       }
       try {
-        if (role === "callee" && sig.offer && !offerApplied) {
+        if (role === "callee" && sig.offer && !offerApplied && localReady) {
           offerApplied = true;
           await pc.setRemoteDescription(JSON.parse(sig.offer));
+          // Attach our local media AFTER the remote description so tracks bind
+          // to the offer's m-lines — this is what makes it two-way.
+          const s = streamRef.current;
+          if (s) {
+            for (const t of s.getTracks()) {
+              const sender = pc.addTrack(t, s);
+              if (t.kind === "video") videoSenderRef.current = sender;
+            }
+          }
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           await sendAnswer(callId, JSON.stringify(answer));
-          // now that transceivers exist, capture the video sender for screen-share
+          // capture the video sender for screen-share
           videoSenderRef.current =
-            pc.getSenders().find((s) => s.track?.kind === "video") ??
+            pc.getSenders().find((x) => x.track?.kind === "video") ??
             pc.getTransceivers().find((t) => t.receiver.track?.kind === "video")?.sender ??
             videoSenderRef.current;
         }
