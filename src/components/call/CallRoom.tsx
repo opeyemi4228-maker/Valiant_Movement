@@ -120,6 +120,8 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
   const [showMore, setShowMore] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const shareRef = useRef<HTMLVideoElement>(null);
@@ -131,6 +133,10 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const camTrackRef = useRef<MediaStreamTrack | null>(null);
   const videoSenderRef = useRef<RTCRtpSender | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
+  const recCtxRef = useRef<AudioContext | null>(null);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function flash(msg: string) {
     setToast(msg);
@@ -394,6 +400,15 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
     return () => clearInterval(t);
   }, [status]);
 
+  /* ---- finalize a recording + free audio nodes if the call unmounts ---- */
+  useEffect(() => {
+    return () => {
+      try { recorderRef.current?.stop(); } catch { /* ignore */ }
+      if (recTimerRef.current) clearInterval(recTimerRef.current);
+      recCtxRef.current?.close().catch(() => {});
+    };
+  }, []);
+
   /* ---- live speech-to-text — transcribes YOUR microphone for the record ----
      A self-healing loop: browsers stop recognition on every result/silence, so
      we always restart it. Uses en-US (widely supported); paused while muted. */
@@ -535,7 +550,79 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
       return next;
     });
   }
+  /* ---- audio recording (mixes your mic + the other party's audio) ---- */
+  function cleanupRecording() {
+    if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
+    recCtxRef.current?.close().catch(() => {});
+    recCtxRef.current = null;
+    recorderRef.current = null;
+  }
+
+  function toggleRecord() {
+    setShowMore(false);
+    if (recording) {
+      try { recorderRef.current?.stop(); } catch { /* onstop handles the rest */ }
+      return;
+    }
+    const AC =
+      typeof window !== "undefined"
+        ? window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        : undefined;
+    if (typeof MediaRecorder === "undefined" || !AC) {
+      flash("Recording isn't supported in this browser");
+      return;
+    }
+    const ctx = new AC();
+    recCtxRef.current = ctx;
+    const dest = ctx.createMediaStreamDestination();
+    let sources = 0;
+    const local = streamRef.current;
+    if (local && local.getAudioTracks().length) {
+      ctx.createMediaStreamSource(new MediaStream(local.getAudioTracks())).connect(dest);
+      sources++;
+    }
+    const remote = remoteVideoRef.current?.srcObject as MediaStream | null;
+    if (remote && remote.getAudioTracks?.().length) {
+      ctx.createMediaStreamSource(new MediaStream(remote.getAudioTracks())).connect(dest);
+      sources++;
+    }
+    if (sources === 0) {
+      flash("No audio to record yet");
+      cleanupRecording();
+      return;
+    }
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((t) => MediaRecorder.isTypeSupported(t));
+    const rec = new MediaRecorder(dest.stream, mime ? { mimeType: mime } : undefined);
+    recChunksRef.current = [];
+    rec.ondataavailable = (e) => { if (e.data.size) recChunksRef.current.push(e.data); };
+    rec.onstop = () => {
+      const type = rec.mimeType || "audio/webm";
+      const blob = new Blob(recChunksRef.current, { type });
+      cleanupRecording();
+      setRecording(false);
+      setRecSeconds(0);
+      if (blob.size > 0) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `valiant-call-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.${type.includes("mp4") ? "m4a" : "webm"}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        flash("Recording saved to your device");
+      }
+    };
+    recorderRef.current = rec;
+    rec.start();
+    setRecording(true);
+    setRecSeconds(0);
+    recTimerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
+    flash("Recording started");
+  }
+
   function endCall() {
+    if (recording) { try { recorderRef.current?.stop(); } catch { /* ignore */ } }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     shareStreamRef.current?.getTracks().forEach((t) => t.stop());
     shareStreamRef.current = null;
@@ -578,6 +665,11 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
               <><span className="size-2 animate-pulse rounded-full bg-[var(--color-green)]" /> {fmtDuration(seconds)}</>
             )}
           </span>
+          {recording && (
+            <span className="flex items-center gap-1.5 rounded-full bg-[var(--color-danger)]/20 px-2.5 py-1 text-xs font-bold text-[var(--color-danger)]">
+              <span className="size-2 animate-pulse rounded-full bg-[var(--color-danger)]" /> REC {fmtDuration(recSeconds)}
+            </span>
+          )}
           <div className="min-w-0 leading-tight">
             <div className="flex items-center gap-1.5 truncate font-bold">
               {isMeeting && <Users className="h-4 w-4 text-white/70" />}
@@ -720,13 +812,17 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
         <CtrlButton on label={speakerOn ? "Speaker off" : "Speaker on"} onClick={toggleSpeaker}
           icon={speakerOn ? <Volume2 className="h-5 w-5" /> : <VolumeX className="h-5 w-5" />}
           danger={!speakerOn} className="hidden sm:grid" />
+        <CtrlButton on label={recording ? "Stop recording" : "Record audio"} onClick={toggleRecord}
+          icon={<Circle className={`h-5 w-5 ${recording ? "fill-[var(--color-danger)] text-[var(--color-danger)]" : ""}`} />}
+          active={recording} className="hidden sm:grid" />
 
-        {/* Mobile: collapse Share + Speaker into a More menu */}
+        {/* Mobile: collapse Share + Speaker + Record into a More menu */}
         <div className="relative grid sm:hidden">
           {showMore && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setShowMore(false)} />
-              <div className="absolute bottom-14 left-1/2 z-20 w-44 -translate-x-1/2 overflow-hidden rounded-2xl bg-[#1c1c24] p-1 shadow-2xl ring-1 ring-white/10">
+              <div className="absolute bottom-14 left-1/2 z-20 w-48 -translate-x-1/2 overflow-hidden rounded-2xl bg-[#1c1c24] p-1 shadow-2xl ring-1 ring-white/10">
+                <MenuRow icon={<Circle className={`h-4 w-4 ${recording ? "fill-[var(--color-danger)] text-[var(--color-danger)]" : ""}`} />} label={recording ? "Stop recording" : "Record audio"} active={recording} onClick={toggleRecord} />
                 <MenuRow icon={<ScreenShare className="h-4 w-4" />} label={sharing ? "Stop sharing" : "Share screen"} active={sharing} onClick={toggleShare} />
                 <MenuRow icon={speakerOn ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />} label={speakerOn ? "Mute speaker" : "Unmute speaker"} onClick={toggleSpeaker} />
               </div>
