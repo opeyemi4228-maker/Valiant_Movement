@@ -103,6 +103,8 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
   const isPeer = !!(config.callId && config.role);
 
   const [status, setStatus] = useState<"connecting" | "live" | "ended">("connecting");
+  const [reconnecting, setReconnecting] = useState(false); // was live, network dropped
+  const [connectTrouble, setConnectTrouble] = useState(false); // never connected after a while
   const [seconds, setSeconds] = useState(0);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(isVideo);
@@ -170,10 +172,17 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
     const callId = config.callId!;
     const role = config.role!;
     let alive = true;
-    let offerApplied = false;
-    let answerApplied = false;
+    // Versioned SDP (compare by string) so an ICE-restart re-offer/answer is
+    // detected and re-applied — this is what lets a call survive a network
+    // change (e.g. WiFi → cellular) instead of freezing.
+    let lastOfferApplied = "";
+    let lastAnswerApplied = "";
+    let tracksAdded = false;
+    let restarting = false;
     let iceCallerIdx = 0;
     let iceCalleeIdx = 0;
+    let pollDelay = 300; // fast while connecting; ramps down once connected
+    let troubleTimer: ReturnType<typeof setTimeout> | null = null;
 
     // STUN discovers your public address; TURN relays media when a direct path
     // is blocked by NAT/firewalls (essential for calls across different
@@ -216,9 +225,34 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
       }
       if (alive) setStatus("live");
     };
-    pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected" && alive) setStatus("live");
+    pc.onconnectionstatechange = async () => {
+      if (!alive) return;
+      const st = pc.connectionState;
+      if (st === "connected") {
+        setStatus("live");
+        setReconnecting(false);
+        setConnectTrouble(false);
+        if (troubleTimer) { clearTimeout(troubleTimer); troubleTimer = null; }
+        pollDelay = 2500; // media is flowing — slow the poll to a trickle
+      } else if (st === "failed" || st === "disconnected") {
+        setReconnecting(true);
+        pollDelay = 300; // speed the poll back up to recover fast
+        // The caller drives recovery with an ICE-restart offer; the callee
+        // re-answers when it sees the new offer (versioned SDP above).
+        if (role === "caller" && !restarting) {
+          restarting = true;
+          try {
+            const offer = await pc.createOffer({ iceRestart: true });
+            await pc.setLocalDescription(offer);
+            await sendOffer(callId, JSON.stringify(offer));
+          } catch { /* ignore */ }
+          restarting = false;
+        }
+      }
     };
+    // If nothing connects within 30s, tell the user (usually a TURN/network
+    // issue) instead of spinning on "Connecting…" forever.
+    troubleTimer = setTimeout(() => { if (alive) setConnectTrouble(true); }, 30_000);
 
     const gUM = (c: MediaStreamConstraints) => navigator.mediaDevices.getUserMedia(c);
 
@@ -277,7 +311,6 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
     // Adaptive signaling poll: fast (300ms) while connecting so the offer →
     // answer → ICE handshake completes in well under a second per step, then
     // ramp down to a slow trickle once media is flowing. Runs immediately.
-    let pollDelay = 300;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     const pollOnce = async () => {
       if (!alive) return;
@@ -289,17 +322,21 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
         return;
       }
       try {
-        if (role === "callee" && sig.offer && !offerApplied && localReady) {
-          offerApplied = true;
+        // Apply a new (or ICE-restart) offer whenever the SDP changes.
+        if (role === "callee" && sig.offer && sig.offer !== lastOfferApplied && localReady) {
+          lastOfferApplied = sig.offer;
           await pc.setRemoteDescription(JSON.parse(sig.offer));
-          // Attach our local media AFTER the remote description so tracks bind
-          // to the offer's m-lines — this is what makes it two-way.
-          const s = streamRef.current;
-          if (s) {
-            for (const t of s.getTracks()) {
-              const sender = pc.addTrack(t, s);
-              if (t.kind === "video") videoSenderRef.current = sender;
+          // First time only: attach our local media AFTER the remote
+          // description so tracks bind to the offer's m-lines (makes it two-way).
+          if (!tracksAdded) {
+            const s = streamRef.current;
+            if (s) {
+              for (const t of s.getTracks()) {
+                const sender = pc.addTrack(t, s);
+                if (t.kind === "video") videoSenderRef.current = sender;
+              }
             }
+            tracksAdded = true;
           }
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
@@ -310,13 +347,15 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
             pc.getTransceivers().find((t) => t.receiver.track?.kind === "video")?.sender ??
             videoSenderRef.current;
         }
-        if (role === "caller" && sig.answer && !answerApplied) {
-          answerApplied = true;
+        // Apply a new (or ICE-restart) answer whenever the SDP changes and we
+        // have an outstanding local offer.
+        if (role === "caller" && sig.answer && sig.answer !== lastAnswerApplied && pc.signalingState === "have-local-offer") {
+          lastAnswerApplied = sig.answer;
           await pc.setRemoteDescription(JSON.parse(sig.answer));
         }
-        // Apply ICE only after the remote description is set — otherwise early
+        // Apply ICE only after a remote description is set — otherwise early
         // candidates get dropped and the call stays stuck "Connecting".
-        const remoteReady = role === "caller" ? answerApplied : offerApplied;
+        const remoteReady = role === "caller" ? !!lastAnswerApplied : !!lastOfferApplied;
         if (remoteReady) {
           const mine = role === "caller" ? sig.iceFromCallee : sig.iceFromCaller;
           let idx = role === "caller" ? iceCalleeIdx : iceCallerIdx;
@@ -336,6 +375,7 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
     return () => {
       alive = false;
       if (pollTimer) clearTimeout(pollTimer);
+      if (troubleTimer) clearTimeout(troubleTimer);
       pc.onicecandidate = null;
       pc.ontrack = null;
       pc.onconnectionstatechange = null;
@@ -519,6 +559,15 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
 
   return (
     <div className="fixed inset-0 z-[60] flex flex-col bg-[#0b0b0f] text-white">
+      {/* Connection banner — reconnection after a drop, or trouble connecting */}
+      {(reconnecting || connectTrouble) && (
+        <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center px-4">
+          <span className="flex items-center gap-2 rounded-full bg-[var(--color-amber)] px-3.5 py-1.5 text-xs font-bold text-white shadow-lg">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            {reconnecting ? "Reconnecting…" : "Trouble connecting — check your network"}
+          </span>
+        </div>
+      )}
       {/* Top bar */}
       <header className="flex shrink-0 items-center justify-between px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
