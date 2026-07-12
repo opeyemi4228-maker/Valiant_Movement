@@ -2,6 +2,7 @@
 
 import { getCurrentUser } from "@/lib/session";
 import * as mem from "@/lib/demo-store";
+import { notify } from "@/lib/notify";
 import type { FeedPost } from "@/lib/feed-types";
 
 /* ============================================================
@@ -35,6 +36,11 @@ export async function likePost(postId: string): Promise<{ ok: boolean; post?: Fe
   const id = await me();
   if (!id) return { ok: false };
   const post = mem.toggleLike(id, postId);
+  if (post && post.liked && post.authorId !== id) {
+    const u = await getCurrentUser();
+    const who = u?.fullName ?? "A member";
+    await notify(post.authorId, { type: "like", actorId: id, actorName: who, body: `${who} liked your post`, href: "home" });
+  }
   return post ? { ok: true, post } : { ok: false };
 }
 
@@ -49,5 +55,16 @@ export async function commentPost(postId: string, text: string): Promise<{ ok: b
   const id = await me();
   if (!id) return { ok: false };
   const post = mem.addComment(id, postId, text);
+  if (post && post.authorId !== id) {
+    const u = await getCurrentUser();
+    const who = u?.fullName ?? "A member";
+    await notify(post.authorId, {
+      type: "comment",
+      actorId: id,
+      actorName: who,
+      body: `${who} commented: "${text.trim().slice(0, 60)}"`,
+      href: "home",
+    });
+  }
   return post ? { ok: true, post } : { ok: false };
 }

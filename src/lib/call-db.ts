@@ -1,8 +1,9 @@
 import "server-only";
-import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { callSignals, conversationMembers, messages, profiles, users } from "@/db/schema";
+import { callSignals, conversationMembers, conversations, messages, profiles, users } from "@/db/schema";
 import type { CallSignal, CallMode, CallStatus } from "./call-types";
+import type { ChatMedia } from "@/app/actions/chat";
 import { CALL_MIN_EACH, type CallEligibility } from "./demo-store";
 
 /* ============================================================
@@ -63,11 +64,83 @@ async function nameOf(userId: string): Promise<string> {
   return row?.name?.trim() || row?.email?.split("@")[0] || "Member";
 }
 
+/* --------------------------- call log → thread ---------------------------
+   Every call that reaches a terminal state is written into the pair's direct
+   conversation as a message with media = { kind: "call", ... } — that's how a
+   missed call "shows" for the callee (thread entry, list preview, unread
+   badge, notification ding). Exactly-once: each terminal transition is a
+   conditional UPDATE … RETURNING, so of two racing hangups only the one that
+   actually flipped the row logs the event. */
+
+interface EndedCallRow {
+  callerId: string;
+  calleeId: string;
+  mode: string;
+  answeredAt: Date | null; // null = never picked up
+}
+
+const endedCallReturning = {
+  callerId: callSignals.callerId,
+  calleeId: callSignals.calleeId,
+  mode: callSignals.mode,
+  answeredAt: callSignals.answeredAt,
+};
+
+async function directConversationBetween(a: string, b: string): Promise<string | null> {
+  const mine = await db
+    .select({ c: conversationMembers.conversationId })
+    .from(conversationMembers)
+    .where(eq(conversationMembers.userId, a));
+  if (mine.length === 0) return null;
+  const [shared] = await db
+    .select({ c: conversationMembers.conversationId })
+    .from(conversationMembers)
+    .innerJoin(conversations, eq(conversations.id, conversationMembers.conversationId))
+    .where(
+      and(
+        eq(conversationMembers.userId, b),
+        eq(conversations.type, "direct"),
+        inArray(conversationMembers.conversationId, mine.map((m) => m.c)),
+      ),
+    )
+    .limit(1);
+  return shared?.c ?? null;
+}
+
+async function logCallEvents(rows: EndedCallRow[], terminal: "missed" | "declined" | "ended"): Promise<void> {
+  for (const row of rows) {
+    try {
+      const conversationId = await directConversationBetween(row.callerId, row.calleeId);
+      if (!conversationId) continue; // no shared thread (shouldn't happen — calls require one)
+      const media: ChatMedia = {
+        kind: "call",
+        callMode: row.mode as CallMode,
+        // A call that was picked up is "completed" however it ends; an
+        // unanswered ring is "missed" unless the callee actively declined.
+        callStatus: row.answeredAt ? "completed" : terminal === "declined" ? "declined" : "missed",
+      };
+      if (row.answeredAt) {
+        media.duration = Math.max(1, Math.round((Date.now() - row.answeredAt.getTime()) / 1000));
+      }
+      await db.insert(messages).values({
+        conversationId,
+        senderId: row.callerId, // authored by the caller → missed calls count as unread for the callee
+        body: null,
+        media,
+        deliveredAt: new Date(),
+      });
+    } catch (err) {
+      // The call flow must never fail because its log entry couldn't be written.
+      console.error("call event log failed:", err);
+    }
+  }
+}
+
 /* ------------------------------- calls ------------------------------- */
 
 export async function placeCall(callerId: string, calleeId: string, mode: CallMode): Promise<CallSignal> {
   // Retire any prior live calls involving the caller.
-  await db
+  const retired = await db
     .update(callSignals)
     .set({ status: "ended", updatedAt: new Date() })
     .where(
@@ -75,7 +148,9 @@ export async function placeCall(callerId: string, calleeId: string, mode: CallMo
         or(eq(callSignals.callerId, callerId), eq(callSignals.calleeId, callerId)),
         inArray(callSignals.status, ["ringing", "accepted"]),
       ),
-    );
+    )
+    .returning(endedCallReturning);
+  await logCallEvents(retired, "ended");
 
   const [callerName, calleeName] = await Promise.all([nameOf(callerId), nameOf(calleeId)]);
   const [row] = await db
@@ -99,12 +174,32 @@ export async function getCallSignal(id: string): Promise<CallSignal | null> {
   const sig = rowToSignal(row as unknown as CallRow);
   // Persist the ringing→missed transition so both sides observe it.
   if (sig.status === "missed" && row.status === "ringing") {
-    await db.update(callSignals).set({ status: "missed", updatedAt: new Date() }).where(eq(callSignals.id, id));
+    const flipped = await db
+      .update(callSignals)
+      .set({ status: "missed", updatedAt: new Date() })
+      .where(and(eq(callSignals.id, id), eq(callSignals.status, "ringing")))
+      .returning(endedCallReturning);
+    await logCallEvents(flipped, "missed");
   }
   return sig;
 }
 
 export async function incomingCallFor(calleeId: string): Promise<CallSignal | null> {
+  // Sweep this callee's expired rings first, so a missed call surfaces in the
+  // thread even if the caller's browser is long gone. Indexed no-op when clean.
+  const stale = await db
+    .update(callSignals)
+    .set({ status: "missed", updatedAt: new Date() })
+    .where(
+      and(
+        eq(callSignals.calleeId, calleeId),
+        eq(callSignals.status, "ringing"),
+        lt(callSignals.createdAt, new Date(Date.now() - RING_TTL_MS)),
+      ),
+    )
+    .returning(endedCallReturning);
+  if (stale.length) await logCallEvents(stale, "missed");
+
   const [row] = await db
     .select()
     .from(callSignals)
@@ -119,13 +214,13 @@ export async function incomingCallFor(calleeId: string): Promise<CallSignal | nu
 export async function answerCallSignal(id: string, meId: string): Promise<CallSignal | null> {
   await db
     .update(callSignals)
-    .set({ status: "accepted", updatedAt: new Date() })
+    .set({ status: "accepted", answeredAt: new Date(), updatedAt: new Date() })
     .where(and(eq(callSignals.id, id), eq(callSignals.calleeId, meId), eq(callSignals.status, "ringing")));
   return getCallSignal(id);
 }
 
 export async function declineCallSignal(id: string, meId: string): Promise<CallSignal | null> {
-  await db
+  const flipped = await db
     .update(callSignals)
     .set({ status: "declined", updatedAt: new Date() })
     .where(
@@ -134,15 +229,19 @@ export async function declineCallSignal(id: string, meId: string): Promise<CallS
         or(eq(callSignals.calleeId, meId), eq(callSignals.callerId, meId)),
         inArray(callSignals.status, ["ringing", "accepted"]),
       ),
-    );
+    )
+    .returning(endedCallReturning);
+  await logCallEvents(flipped, "declined");
   return getCallSignal(id);
 }
 
 export async function endCallSignal(id: string): Promise<void> {
-  await db
+  const flipped = await db
     .update(callSignals)
     .set({ status: "ended", updatedAt: new Date() })
-    .where(and(eq(callSignals.id, id), ne(callSignals.status, "missed"), ne(callSignals.status, "declined")));
+    .where(and(eq(callSignals.id, id), inArray(callSignals.status, ["ringing", "accepted"])))
+    .returning(endedCallReturning);
+  await logCallEvents(flipped, "ended");
 }
 
 /* --------------------------- WebRTC signaling --------------------------- */

@@ -432,6 +432,7 @@ export const callSignals = pgTable(
     calleeName: text("callee_name").notNull(),
     mode: text("mode").notNull(), // "voice" | "video"
     status: text("status").notNull().default("ringing"), // ringing|accepted|declined|missed|ended
+    answeredAt: timestamp("answered_at", { withTimezone: true }), // set on accept; duration = ended - answered
     offer: text("offer"),
     answer: text("answer"),
     iceCaller: jsonb("ice_caller").notNull().default(sql`'[]'::jsonb`),
@@ -447,6 +448,25 @@ export const callSignals = pgTable(
     // signaling rows are ephemeral; this drives the stale-call sweeper
     index("call_signals_updated_idx").on(t.updatedAt),
   ],
+);
+
+/* ---- notifications: social & system alerts surfaced in the bell ---- */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: pk(),
+    userId: uuid("user_id") // recipient
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull(), // like|comment|repost|follow|mention|call|system|verified
+    actorId: uuid("actor_id").references(() => users.id, { onDelete: "set null" }),
+    actorName: text("actor_name"),
+    body: text("body").notNull(),
+    href: text("href"), // in-app destination (a tab id)
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)],
 );
 
 /* ----------------------------- relations ----------------------------- */

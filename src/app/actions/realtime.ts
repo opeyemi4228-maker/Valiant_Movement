@@ -4,6 +4,7 @@ import { getCurrentUser } from "@/lib/session";
 import { usesDb } from "@/lib/env";
 import * as mem from "@/lib/demo-store";
 import * as cdb from "@/lib/call-db";
+import { notify } from "@/lib/notify";
 import type { CallSignal, CallMode } from "@/lib/call-types";
 
 /* ============================================================
@@ -37,6 +38,13 @@ export async function startCall(calleeId: string, mode: CallMode): Promise<{ ok:
   }
 
   const call = usesDb(id) ? await cdb.placeCall(id, calleeId, mode) : mem.placeCall(id, calleeId, mode);
+  await notify(calleeId, {
+    type: "call",
+    actorId: id,
+    actorName: call.callerName,
+    body: `${call.callerName} ${mode === "video" ? "video-" : ""}called you`,
+    href: "messages",
+  });
   return { ok: true, call };
 }
 
@@ -104,11 +112,19 @@ export async function getSignal(callId: string): Promise<{
 }
 
 export async function pollPresence(): Promise<{ incomingCall: CallSignal | null; unread: number }> {
-  const id = await me();
-  if (!id) return { incomingCall: null, unread: 0 };
-  if (usesDb(id)) {
-    const [incomingCall, unread] = await Promise.all([cdb.incomingCallFor(id), cdb.unreadFor(id)]);
-    return { incomingCall, unread };
+  // This is a high-frequency background heartbeat: a transient failure (Neon
+  // cold start, network blip) must degrade to "nothing new" — the next poll
+  // recovers — rather than surface an error to the page.
+  try {
+    const id = await me();
+    if (!id) return { incomingCall: null, unread: 0 };
+    if (usesDb(id)) {
+      const [incomingCall, unread] = await Promise.all([cdb.incomingCallFor(id), cdb.unreadFor(id)]);
+      return { incomingCall, unread };
+    }
+    return { incomingCall: mem.incomingCallFor(id), unread: mem.unreadFor(id) };
+  } catch (err) {
+    console.error("pollPresence failed (returning empty):", err);
+    return { incomingCall: null, unread: 0 };
   }
-  return { incomingCall: mem.incomingCallFor(id), unread: mem.unreadFor(id) };
 }

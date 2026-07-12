@@ -28,6 +28,7 @@ export interface ChatConversation {
   title: string;
   lastBody: string | null;
   lastHasMedia: boolean;
+  lastMedia: ChatMedia | null;
   lastAt: string | null;
   unread: number;
 }
@@ -42,12 +43,20 @@ export interface ChatMessageDTO {
 }
 
 export interface ChatMedia {
-  kind: "image" | "audio" | "file";
+  kind: "image" | "audio" | "file" | "call";
   url?: string;
   name?: string;
   size?: string;
-  duration?: number;
+  duration?: number; // seconds — voice-note length or call length
+  // kind === "call": an entry in the thread's call log. "missed" covers both
+  // an unanswered ring and a caller cancel; "completed" carries `duration`.
+  callMode?: "voice" | "video";
+  callStatus?: "missed" | "declined" | "completed";
 }
+
+/** Server-side input ceilings (the client also enforces its own). */
+const MAX_BODY_CHARS = 4000;
+const MAX_MEDIA_DATAURL_CHARS = 7_500_000; // ≈ 5.5 MB decoded
 
 async function meId(): Promise<string | null> {
   const u = await getCurrentUser();
@@ -145,6 +154,7 @@ async function getConversationsFor(id: string): Promise<ChatConversation[]> {
       title: other ? fullName({ fullName: other.name }, other.email) : "Conversation",
       lastBody: last?.body ?? null,
       lastHasMedia: !!last?.media,
+      lastMedia: (last?.media as ChatMedia | null) ?? null,
       lastAt: last?.createdAt ? new Date(last.createdAt).toISOString() : null,
       unread: n ?? 0,
     });
@@ -213,11 +223,26 @@ async function isMember(conversationId: string, userId: string): Promise<boolean
   return !!row;
 }
 
-export async function getMessages(conversationId: string): Promise<{ ok: boolean; messages: ChatMessageDTO[]; error?: string }> {
+export async function getMessages(conversationId: string): Promise<{
+  ok: boolean;
+  messages: ChatMessageDTO[];
+  /** When the other member last opened this thread — drives read receipts. */
+  otherLastReadAt?: string | null;
+  error?: string;
+}> {
   const id = await meId();
   if (!id) return { ok: false, messages: [], error: "unauthenticated" };
   if (!usesDb(id)) return mem.getMessages(id, conversationId);
   if (!(await isMember(conversationId, id))) return { ok: false, messages: [], error: "forbidden" };
+
+  const others = await db
+    .select({ lastReadAt: conversationMembers.lastReadAt })
+    .from(conversationMembers)
+    .where(and(eq(conversationMembers.conversationId, conversationId), ne(conversationMembers.userId, id)));
+  // "Read" means every other member has seen it — use the earliest read mark.
+  const otherLastReadAt = others.length && others.every((o) => o.lastReadAt)
+    ? new Date(Math.min(...others.map((o) => o.lastReadAt!.getTime()))).toISOString()
+    : null;
 
   const rows = await db
     .select({
@@ -244,6 +269,7 @@ export async function getMessages(conversationId: string): Promise<{ ok: boolean
 
   return {
     ok: true,
+    otherLastReadAt,
     messages: rows.map((r) => ({
       id: r.id,
       body: r.body,
@@ -281,8 +307,12 @@ export async function sendMessage(
     return { ...res, flagged: hit.flagged };
   }
   if (!(await isMember(conversationId, id))) return { ok: false, error: "forbidden" };
-  const text = body.trim();
+  const text = body.trim().slice(0, MAX_BODY_CHARS);
   if (!text && !media) return { ok: false, error: "empty" };
+  if (media?.kind === "call") return { ok: false, error: "forbidden" }; // call events are server-authored only
+  if (media?.url && media.url.length > MAX_MEDIA_DATAURL_CHARS) {
+    return { ok: false, error: "Attachment is too large — keep it under 5 MB." };
+  }
 
   const [row] = await db
     .insert(messages)

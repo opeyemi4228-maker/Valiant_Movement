@@ -1,7 +1,7 @@
 "use client";
 
 /* eslint-disable @next/next/no-img-element */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Home,
   Users,
@@ -66,7 +66,21 @@ export function MemberShell({
 }) {
   const [tab, setTab] = useState<Tab>("home");
   const [mobileNav, setMobileNav] = useState(false);
+  const [notifUnread, setNotifUnread] = useState(0);
   const name = user.fullName ?? "Member";
+
+  // Live notification badge — RealtimePresence broadcasts the unread count;
+  // the toast's "open" action jumps to the notifications tab.
+  useEffect(() => {
+    const onCount = (e: Event) => setNotifUnread((e as CustomEvent<number>).detail ?? 0);
+    const onOpen = () => setTab("notifications");
+    window.addEventListener("valiant:notif-unread", onCount);
+    window.addEventListener("valiant:open-notifications", onOpen);
+    return () => {
+      window.removeEventListener("valiant:notif-unread", onCount);
+      window.removeEventListener("valiant:open-notifications", onOpen);
+    };
+  }, []);
   const handle = "@" + name.toLowerCase().replace(/\s+/g, "_");
 
   const me = { name, handle, color: "#e07400", email: user.email };
@@ -89,7 +103,7 @@ export function MemberShell({
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
       {/* ============================ Sidebar (desktop) ============================ */}
       <aside className="hidden w-[88px] shrink-0 flex-col border-r border-[var(--color-line)] bg-white px-2 py-4 lg:flex xl:w-[270px] xl:px-4">
-        <SidebarInner tab={tab} go={go} me={me} />
+        <SidebarInner tab={tab} go={go} me={me} notifCount={notifUnread} />
       </aside>
 
       {/* ============================ Sidebar (mobile drawer) ============================ */}
@@ -97,7 +111,7 @@ export function MemberShell({
         <div className="fixed inset-0 z-50 lg:hidden">
           <div className="absolute inset-0 bg-black/50" onClick={() => setMobileNav(false)} />
           <aside className="absolute left-0 top-0 flex h-full w-[280px] flex-col border-r border-[var(--color-line)] bg-white px-4 py-4">
-            <SidebarInner tab={tab} go={go} me={me} expanded />
+            <SidebarInner tab={tab} go={go} me={me} notifCount={notifUnread} expanded />
           </aside>
         </div>
       )}
@@ -159,7 +173,9 @@ export function MemberShell({
             safe-area padding for iOS home-indicator devices. */}
         <div className="shrink-0 border-t border-[var(--color-line)] bg-white px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
           <ExpandableTabs
-            tabs={MOBILE_TABS}
+            tabs={MOBILE_TABS.map((t, i) =>
+              MOBILE_NAV[i].id === "notifications" ? { ...t, badge: notifUnread || undefined } : t,
+            )}
             selected={activeMobileIndex >= 0 ? activeMobileIndex : null}
             onChange={onMobileNav}
             activeColor="text-[var(--color-brand-strong)]"
@@ -187,11 +203,13 @@ function SidebarInner({
   tab,
   go,
   me,
+  notifCount = 0,
   expanded = false,
 }: {
   tab: Tab;
   go: (t: Tab) => void;
   me: { name: string; handle: string; email: string };
+  notifCount?: number;
   expanded?: boolean;
 }) {
   // `expanded` forces labels (mobile drawer). On desktop labels show at xl.
@@ -218,6 +236,7 @@ function SidebarInner({
         {NAV.map((item) => {
           const active = tab === item.id;
           const Icon = item.icon;
+          const badge = item.id === "notifications" ? notifCount : item.badge;
           return (
             <button
               key={item.id}
@@ -230,9 +249,9 @@ function SidebarInner({
             >
               <span className="relative">
                 <Icon className="h-[22px] w-[22px]" strokeWidth={active ? 2.4 : 1.9} />
-                {item.badge ? (
+                {badge ? (
                   <span className="absolute -right-2 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold text-white">
-                    {item.badge > 9 ? "9+" : item.badge}
+                    {badge > 9 ? "9+" : badge}
                   </span>
                 ) : null}
               </span>

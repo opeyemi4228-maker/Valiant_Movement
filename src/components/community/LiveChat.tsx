@@ -27,6 +27,8 @@ import {
   Pause,
   FileText,
   Download,
+  PhoneMissed,
+  PhoneOff,
 } from "lucide-react";
 import {
   loadChat,
@@ -63,6 +65,25 @@ function dayLabel(iso: string | null) {
   yest.setDate(today.getDate() - 1);
   if (d.toDateString() === yest.toDateString()) return "Yesterday";
   return d.toLocaleDateString([], { day: "2-digit", month: "short" });
+}
+
+/** One-line preview for the conversation list, media- and call-aware. */
+function previewFor(c: ChatConversation): { text: string; missed: boolean } {
+  if (c.lastBody) return { text: c.lastBody, missed: false };
+  const m = c.lastMedia;
+  if (!m) return { text: "Say hello 👋", missed: false };
+  if (m.kind === "call") {
+    const video = m.callMode === "video";
+    const icon = video ? "🎥" : "📞";
+    if (m.callStatus === "completed")
+      return { text: `${icon} ${video ? "Video" : "Voice"} call · ${fmtTime(m.duration ?? 0)}`, missed: false };
+    if (m.callStatus === "declined") return { text: `${icon} Call declined`, missed: false };
+    return { text: `${icon} Missed ${video ? "video" : "voice"} call`, missed: true };
+  }
+  if (m.kind === "audio")
+    return { text: `🎤 Voice note${m.duration ? " · " + fmtTime(m.duration) : ""}`, missed: false };
+  if (m.kind === "image") return { text: "📷 Photo", missed: false };
+  return { text: `📄 ${m.name ?? "Document"}`, missed: false };
 }
 
 /* ------------------------------ media helpers ------------------------------ */
@@ -125,6 +146,7 @@ export function LiveChat() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
+  const [otherReadAt, setOtherReadAt] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastCountRef = useRef(0);
@@ -158,6 +180,7 @@ export function LiveChat() {
     const res = await getMessages(cid);
     if (res.ok) {
       setMessages(res.messages);
+      setOtherReadAt(res.otherLastReadAt ?? null);
       // mark read locally
       setConvos((prev) => prev.map((c) => (c.id === cid ? { ...c, unread: 0 } : c)));
     }
@@ -177,7 +200,10 @@ export function LiveChat() {
     const t = setInterval(async () => {
       if (activeId) {
         const res = await getMessages(activeId);
-        if (res.ok) setMessages(res.messages);
+        if (res.ok) {
+          setMessages(res.messages);
+          setOtherReadAt(res.otherLastReadAt ?? null);
+        }
       }
       const list = await refreshConversations();
       // keep unread at 0 for the conversation we're viewing
@@ -223,7 +249,12 @@ export function LiveChat() {
       at: new Date().toISOString(),
     };
     setMessages((m) => [...m, optimistic]);
-    const res = await sendMessage(activeId, text, media ?? null);
+    let res: Awaited<ReturnType<typeof sendMessage>>;
+    try {
+      res = await sendMessage(activeId, text, media ?? null);
+    } catch {
+      res = { ok: false, error: "Couldn't reach the server — check your connection and try again." };
+    }
     if (res.ok) {
       if (res.flagged) {
         flashToast("⚠️ Flagged for review — your Ward Captain & LGA Coordinator were notified.");
@@ -231,6 +262,13 @@ export function LiveChat() {
       await loadThread(activeId);
       const list = await refreshConversations();
       setConvos(list.map((c) => (c.id === activeId ? { ...c, unread: 0 } : c)));
+    } else {
+      // Roll back: drop the optimistic bubble, put the text back in the box.
+      setMessages((m) => m.filter((x) => x.id !== optimistic.id));
+      if (text) setDraft(text);
+      flashToast(
+        res.error && res.error.length > 12 ? res.error : "Message didn't send — please try again.",
+      );
     }
     setSending(false);
   }
@@ -457,9 +495,15 @@ export function LiveChat() {
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-[13px] text-[var(--color-muted)]">
-                      {c.lastBody ?? (c.lastHasMedia ? "📎 Attachment" : "Say hello 👋")}
-                    </span>
+                    {(() => {
+                      const p = previewFor(c);
+                      const alert = p.missed && c.unread > 0;
+                      return (
+                        <span className={`truncate text-[13px] ${alert ? "font-semibold text-[var(--color-danger)]" : "text-[var(--color-muted)]"}`}>
+                          {p.text}
+                        </span>
+                      );
+                    })()}
                     {c.unread > 0 && (
                       <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-[var(--color-brand)] px-1.5 text-[11px] font-bold text-white">
                         {c.unread}
@@ -540,8 +584,22 @@ export function LiveChat() {
                     <p className="py-10 text-center text-sm text-[var(--color-muted)]">No messages yet — say hello 👋</p>
                   )}
                   {messages.map((m, i) => {
+                    if (m.media?.kind === "call") {
+                      const callMedia = m.media;
+                      return (
+                        <CallEventRow
+                          key={m.id}
+                          media={callMedia}
+                          mine={m.mine}
+                          at={m.at}
+                          onCallBack={() => startCall(callMedia.callMode ?? "voice")}
+                        />
+                      );
+                    }
                     const prev = messages[i - 1];
                     const grouped = prev && prev.mine === m.mine;
+                    // ticks: ✓ sending · ✓✓ delivered · blue ✓✓ read
+                    const read = !!otherReadAt && m.at <= otherReadAt;
                     return (
                       <div key={m.id} className={`flex ${m.mine ? "justify-end" : "justify-start"} ${grouped ? "mt-0.5" : "mt-2"}`}>
                         <div className={`relative flex max-w-[82%] flex-col gap-1 rounded-2xl px-2 py-1.5 text-[14.5px] leading-relaxed shadow-sm ${m.mine ? "rounded-br-md bg-[var(--color-brand-tint)] text-[var(--color-ink)]" : "rounded-bl-md bg-white text-[var(--color-ink)]"}`}>
@@ -551,7 +609,12 @@ export function LiveChat() {
                           {m.body && <span className="whitespace-pre-wrap break-words px-1">{m.body}</span>}
                           <span className="flex items-center gap-0.5 self-end px-1 text-[10px] text-[var(--color-faint)]">
                             {clock(m.at)}
-                            {m.mine && (m.id.startsWith("tmp-") ? <Check className="h-3.5 w-3.5" /> : <CheckCheck className="h-3.5 w-3.5 text-[#0ea5e9]" />)}
+                            {m.mine &&
+                              (m.id.startsWith("tmp-") ? (
+                                <Check className="h-3.5 w-3.5" />
+                              ) : (
+                                <CheckCheck className={`h-3.5 w-3.5 ${read ? "text-[#0ea5e9]" : ""}`} />
+                              ))}
                           </span>
                         </div>
                       </div>
@@ -714,6 +777,66 @@ function MemberPicker({
 }
 
 /* ------------------------------ media bubbles ------------------------------ */
+
+/** An entry in the thread's call log — missed / declined / completed call.
+ *  Tapping it calls the member back in the same mode. */
+function CallEventRow({
+  media,
+  mine,
+  at,
+  onCallBack,
+}: {
+  media: ChatMedia;
+  mine: boolean;
+  at: string;
+  onCallBack: () => void;
+}) {
+  const video = media.callMode === "video";
+  const missed = media.callStatus === "missed";
+  const declined = media.callStatus === "declined";
+  const label =
+    media.callStatus === "completed"
+      ? `${video ? "Video" : "Voice"} call`
+      : missed
+        ? mine
+          ? "No answer"
+          : `Missed ${video ? "video" : "voice"} call`
+        : mine
+          ? "Call declined"
+          : `Declined ${video ? "video" : "voice"} call`;
+  const Icon = missed ? PhoneMissed : declined ? PhoneOff : video ? Video : Phone;
+  const alert = missed && !mine; // the callee's missed call is the loud one
+  return (
+    <div className={`mt-2 flex ${mine ? "justify-end" : "justify-start"}`}>
+      <button
+        onClick={onCallBack}
+        title="Call back"
+        className={`flex items-center gap-2.5 rounded-2xl px-3 py-2 text-left shadow-sm transition hover:brightness-95 ${
+          mine ? "rounded-br-md bg-[var(--color-brand-tint)]" : "rounded-bl-md bg-white"
+        }`}
+      >
+        <span
+          className={`grid size-8 shrink-0 place-items-center rounded-full ${
+            alert
+              ? "bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+              : "bg-[var(--color-surface-2)] text-[var(--color-ink-soft)]"
+          }`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="flex flex-col items-start leading-tight">
+          <span className={`text-[13.5px] font-semibold ${alert ? "text-[var(--color-danger)]" : "text-[var(--color-ink)]"}`}>
+            {label}
+          </span>
+          <span className="text-[11px] text-[var(--color-faint)]">
+            {media.callStatus === "completed" && media.duration ? `${fmtTime(media.duration)} · ` : ""}
+            {clock(at)} · tap to call back
+          </span>
+        </span>
+      </button>
+    </div>
+  );
+}
 
 function ImageMedia({ media }: { media: ChatMedia }) {
   return (

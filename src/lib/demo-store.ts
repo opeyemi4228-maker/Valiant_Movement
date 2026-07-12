@@ -10,6 +10,7 @@ import type {
 import type { FeedPost, FeedComment } from "./feed-types";
 import type { CallSignal } from "./call-types";
 import type { ModerationCategory } from "./moderation";
+import type { NotifInput, NotifType, NotificationDTO } from "./notif-types";
 
 /** How many messages EACH member must send before they can call each other. */
 export const CALL_MIN_EACH = 3;
@@ -109,6 +110,12 @@ interface Convo {
   lastRead: Record<string, number>;
 }
 
+/** A call plus book-keeping the wire type doesn't carry. */
+interface StoredCall extends CallSignal {
+  answeredAtMs?: number; // set on accept; duration = ended - answered
+  logged?: boolean; // its terminal outcome was written into the thread
+}
+
 export type { FeedPost, FeedComment };
 
 interface Store {
@@ -126,9 +133,22 @@ interface Store {
     repostedBy: Set<string>;
     comments: Array<{ id: string; authorId: string; text: string; at: number }>;
   }>;
-  calls: CallSignal[];
+  calls: StoredCall[];
   alerts: ModerationAlert[];
   rtc: Map<string, CallRtc>;
+  notifs: NotifRow[];
+}
+
+interface NotifRow {
+  id: string;
+  userId: string;
+  type: string;
+  actorId?: string;
+  actorName: string | null;
+  body: string;
+  href: string | null;
+  read: boolean;
+  at: number;
 }
 
 /** WebRTC signaling channel for a 1:1 call (SDP + trickled ICE candidates). */
@@ -182,7 +202,7 @@ function seed(): Store {
     },
   ];
 
-  return { members, convos, messages, posts, calls: [], alerts: [], rtc: new Map() };
+  return { members, convos, messages, posts, calls: [], alerts: [], rtc: new Map(), notifs: [] };
 }
 
 function store(): Store {
@@ -192,6 +212,7 @@ function store(): Store {
   s.calls ??= [];
   s.alerts ??= [];
   s.rtc ??= new Map();
+  s.notifs ??= [];
   return s;
 }
 
@@ -350,6 +371,7 @@ export function conversationsFor(meId: string): ChatConversation[] {
       title: otherId ? memberName(otherId) : "Conversation",
       lastBody: last?.body ?? null,
       lastHasMedia: !!last?.media,
+      lastMedia: last?.media ?? null,
       lastAt: last ? new Date(last.at).toISOString() : null,
       unread,
     });
@@ -376,14 +398,23 @@ function isMember(convId: string, meId: string): boolean {
   return !!store().convos.find((c) => c.id === convId && c.memberIds.includes(meId));
 }
 
-export function getMessages(meId: string, convId: string): { ok: boolean; messages: ChatMessageDTO[]; error?: string } {
+export function getMessages(
+  meId: string,
+  convId: string,
+): { ok: boolean; messages: ChatMessageDTO[]; otherLastReadAt?: string | null; error?: string } {
   if (!isMember(convId, meId)) return { ok: false, messages: [], error: "forbidden" };
   const s = store();
   const msgs = s.messages.filter((m) => m.convId === convId).sort((a, b) => a.at - b.at);
   const convo = s.convos.find((c) => c.id === convId)!;
   convo.lastRead[meId] = Date.now();
+  const otherReads = convo.memberIds.filter((x) => x !== meId).map((x) => convo.lastRead[x] ?? 0);
+  const otherLastReadAt =
+    otherReads.length && otherReads.every((t) => t > 0)
+      ? new Date(Math.min(...otherReads)).toISOString()
+      : null;
   return {
     ok: true,
+    otherLastReadAt,
     messages: msgs.map((m) => ({
       id: m.id,
       body: m.body,
@@ -397,8 +428,9 @@ export function getMessages(meId: string, convId: string): { ok: boolean; messag
 
 export function sendMessage(meId: string, convId: string, body: string, media?: ChatMedia | null): { ok: boolean; message?: ChatMessageDTO; error?: string } {
   if (!isMember(convId, meId)) return { ok: false, error: "forbidden" };
-  const text = body.trim();
+  const text = body.trim().slice(0, 4000);
   if (!text && !media) return { ok: false, error: "empty" };
+  if (media?.kind === "call") return { ok: false, error: "forbidden" }; // call events are store-authored only
   const s = store();
   const msg: Msg = { id: "msg_" + randomUUID().slice(0, 8), convId, senderId: meId, body: text || null, media: media ?? null, at: Date.now() };
   s.messages.push(msg);
@@ -484,8 +516,35 @@ export function addComment(meId: string, postId: string, text: string): FeedPost
 
 const RING_TTL = 35_000; // a ringing call goes "missed" after this
 
-function expire(c: CallSignal): CallSignal {
-  if (c.status === "ringing" && Date.now() - c.at > RING_TTL) c.status = "missed";
+/** Mirror of call-db's call log: a terminal call becomes a { kind: "call" }
+ *  message in the pair's conversation. `logged` keeps it exactly-once. */
+function logCallEvent(c: StoredCall) {
+  if (c.logged) return;
+  c.logged = true;
+  const s = store();
+  const convo = s.convos.find((x) => x.memberIds.includes(c.callerId) && x.memberIds.includes(c.calleeId));
+  if (!convo) return;
+  const media: ChatMedia = {
+    kind: "call",
+    callMode: c.mode,
+    callStatus: c.answeredAtMs ? "completed" : c.status === "declined" ? "declined" : "missed",
+  };
+  if (c.answeredAtMs) media.duration = Math.max(1, Math.round((Date.now() - c.answeredAtMs) / 1000));
+  s.messages.push({
+    id: "msg_" + randomUUID().slice(0, 8),
+    convId: convo.id,
+    senderId: c.callerId, // missed calls count as unread for the callee
+    body: null,
+    media,
+    at: Date.now(),
+  });
+}
+
+function expire(c: StoredCall): StoredCall {
+  if (c.status === "ringing" && Date.now() - c.at > RING_TTL) {
+    c.status = "missed";
+    logCallEvent(c);
+  }
   return c;
 }
 
@@ -495,6 +554,7 @@ export function placeCall(callerId: string, calleeId: string, mode: CallSignal["
   for (const c of s.calls) {
     if ((c.callerId === callerId || c.calleeId === callerId) && (c.status === "ringing" || c.status === "accepted")) {
       c.status = "ended";
+      logCallEvent(c);
     }
   }
   const caller = s.members.get(callerId);
@@ -530,8 +590,13 @@ export function incomingCallFor(meId: string): CallSignal | null {
 }
 
 export function answerCallSignal(id: string, meId: string): CallSignal | null {
-  const c = getCallSignal(id);
-  if (c && c.calleeId === meId && c.status === "ringing") c.status = "accepted";
+  const c = store().calls.find((x) => x.id === id);
+  if (!c) return null;
+  expire(c);
+  if (c.calleeId === meId && c.status === "ringing") {
+    c.status = "accepted";
+    c.answeredAtMs = Date.now();
+  }
   return c;
 }
 
@@ -539,13 +604,17 @@ export function declineCallSignal(id: string, meId: string): CallSignal | null {
   const c = getCallSignal(id);
   if (c && (c.calleeId === meId || c.callerId === meId) && (c.status === "ringing" || c.status === "accepted")) {
     c.status = "declined";
+    logCallEvent(c as StoredCall);
   }
   return c;
 }
 
 export function endCallSignal(id: string): CallSignal | null {
   const c = store().calls.find((x) => x.id === id);
-  if (c && c.status !== "missed" && c.status !== "declined") c.status = "ended";
+  if (c && (c.status === "ringing" || c.status === "accepted")) {
+    c.status = "ended";
+    logCallEvent(c);
+  }
   return c ?? null;
 }
 
@@ -580,6 +649,45 @@ export function recordModerationAlert(input: {
 
 export function listModerationAlerts(limit = 50): ModerationAlert[] {
   return store().alerts.slice(0, limit);
+}
+
+/* ----------------------------- notifications ----------------------------- */
+
+export function addNotification(userId: string, input: NotifInput): void {
+  store().notifs.unshift({
+    id: "ntf_" + randomUUID().slice(0, 8),
+    userId,
+    type: input.type,
+    actorId: input.actorId,
+    actorName: input.actorName ?? null,
+    body: input.body,
+    href: input.href ?? null,
+    read: false,
+    at: Date.now(),
+  });
+}
+
+export function listNotifications(userId: string, limit = 50): NotificationDTO[] {
+  return store()
+    .notifs.filter((n) => n.userId === userId)
+    .slice(0, limit)
+    .map((n) => ({
+      id: n.id,
+      type: n.type as NotifType,
+      actorName: n.actorName,
+      body: n.body,
+      href: n.href,
+      read: n.read,
+      at: new Date(n.at).toISOString(),
+    }));
+}
+
+export function unreadNotifCount(userId: string): number {
+  return store().notifs.filter((n) => n.userId === userId && !n.read).length;
+}
+
+export function markNotificationsRead(userId: string): void {
+  for (const n of store().notifs) if (n.userId === userId) n.read = true;
 }
 
 /** Look up the conversation two members share (direct chat). */

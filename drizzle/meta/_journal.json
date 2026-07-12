@@ -15,6 +15,20 @@
       "when": 1783287931728,
       "tag": "0001_workable_lady_mastermind",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783836659180,
+      "tag": "0002_sour_synch",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783837663948,
+      "tag": "0003_thankful_silver_surfer",
+      "breakpoints": true
     }
   ]
 }

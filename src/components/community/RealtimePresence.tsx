@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { MessageCircle } from "lucide-react";
+import { MessageCircle, Bell } from "lucide-react";
 import { pollPresence, answerCall, declineCall, hangupCall } from "@/app/actions/realtime";
+import { getNotifications } from "@/app/actions/notifications";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
 import { IncomingCall } from "@/components/call/IncomingCall";
 import type { CallSignal } from "@/lib/call-types";
@@ -14,13 +15,18 @@ export function RealtimePresence() {
   const [incoming, setIncoming] = useState<CallSignal | null>(null);
   const [activeCall, setActiveCall] = useState<CallConfig | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [notifToast, setNotifToast] = useState<string | null>(null);
 
   const prevUnread = useRef<number>(-1);
+  const prevNotifCount = useRef<number>(-1);
+  const prevNotifTop = useRef<string | null>(null);
   const acceptedId = useRef<string | null>(null);
   const incomingId = useRef<string | null>(null);
-  incomingId.current = incoming?.id ?? null;
   const inCall = useRef(false);
-  inCall.current = !!activeCall;
+  useEffect(() => {
+    incomingId.current = incoming?.id ?? null;
+    inCall.current = !!activeCall;
+  }, [incoming, activeCall]);
 
   useEffect(() => {
     let alive = true;
@@ -35,6 +41,26 @@ export function RealtimePresence() {
         setTimeout(() => setToast((t) => (t === "New message" ? null : t)), 3500);
       }
       prevUnread.current = unread;
+
+      // notification center — alert on a genuinely new item, broadcast the
+      // unread count so the nav bell badge stays live.
+      const notif = await getNotifications();
+      if (!alive) return;
+      const top = notif.items[0] ?? null;
+      if (
+        prevNotifCount.current >= 0 &&
+        top &&
+        top.id !== prevNotifTop.current &&
+        notif.unread > prevNotifCount.current
+      ) {
+        playDing();
+        const body = top.body;
+        setNotifToast(body);
+        setTimeout(() => setNotifToast((t) => (t === body ? null : t)), 4500);
+      }
+      prevNotifCount.current = notif.unread;
+      prevNotifTop.current = top?.id ?? null;
+      window.dispatchEvent(new CustomEvent("valiant:notif-unread", { detail: notif.unread }));
 
       // incoming call ring (ignore while already in a call)
       if (inCall.current) return;
@@ -88,6 +114,15 @@ export function RealtimePresence() {
           <MessageCircle className="h-4 w-4 text-[var(--color-brand)]" />
           {toast}
         </div>
+      )}
+      {notifToast && (
+        <button
+          onClick={() => { window.dispatchEvent(new Event("valiant:open-notifications")); setNotifToast(null); }}
+          className="fixed left-1/2 top-4 z-[76] flex max-w-[90vw] -translate-x-1/2 items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[var(--color-ink)] shadow-xl ring-1 ring-[var(--color-line)]"
+        >
+          <Bell className="h-4 w-4 shrink-0 text-[var(--color-brand-strong)]" />
+          <span className="truncate">{notifToast}</span>
+        </button>
       )}
     </>
   );
