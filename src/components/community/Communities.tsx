@@ -1,237 +1,268 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
 import { useEffect, useState } from "react";
 import {
-  Search,
   Users,
-  Plus,
-  Check,
-  TrendingUp,
   MapPin,
-  Compass,
-  Globe2,
+  Megaphone,
+  ShieldCheck,
   ChevronRight,
+  Landmark,
+  Globe2,
+  Home,
+  Vote,
+  X,
+  Loader2,
 } from "lucide-react";
-import { communities as seed, type Community } from "@/data/community";
+import { getMyCommunities, getCommunityMembers, type MyCommunitiesResult } from "@/app/actions/communities";
+import type { CommunityDTO, CommunityMemberDTO, CommunityScope } from "@/lib/communities";
+import { Avatar } from "./Avatar";
 
 function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
   return String(n);
 }
 
-const FILTERS = ["Discover", "Your communities", "Chapters", "Wards", "Interest"] as const;
+const SCOPE_META: Record<CommunityScope, { icon: typeof Users; label: string; color: string }> = {
+  national: { icon: Megaphone, label: "National", color: "var(--color-navy)" },
+  state: { icon: Landmark, label: "State chapter", color: "var(--color-brand)" },
+  lga: { icon: Globe2, label: "LGA group", color: "#7c3aed" },
+  ward: { icon: Home, label: "Ward group", color: "#0ea5e9" },
+  polling_unit: { icon: Vote, label: "Polling unit", color: "var(--color-green)" },
+  interest: { icon: Users, label: "Interest group", color: "var(--color-amber)" },
+};
 
 export function Communities() {
-  const [list, setList] = useState<Community[]>(seed);
-  const [filter, setFilter] = useState<(typeof FILTERS)[number]>("Discover");
-  const [query, setQuery] = useState("");
+  const [res, setRes] = useState<MyCommunitiesResult | null>(null);
+  const [open, setOpen] = useState<CommunityDTO | null>(null);
 
-  function toggleJoin(id: string) {
-    setList((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? { ...c, joined: !c.joined, members: c.members + (c.joined ? -1 : 1) }
-          : c,
-      ),
+  useEffect(() => {
+    let alive = true;
+    getMyCommunities().then((r) => { if (alive) setRes(r); });
+    return () => { alive = false; };
+  }, []);
+
+  /* ------------------------------ loading ------------------------------ */
+  if (!res) {
+    return (
+      <div className="grid h-full place-items-center">
+        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+      </div>
     );
   }
 
-  // Live presence — online counts drift up and down so the directory feels alive.
-  useEffect(() => {
-    const t = setInterval(() => {
-      setList((prev) =>
-        prev.map((c) => {
-          const drift = Math.floor(Math.random() * 9) - 4;
-          return { ...c, online: Math.max(1, c.online + drift) };
-        }),
-      );
-    }, 3500);
-    return () => clearInterval(t);
-  }, []);
+  /* ---------------------------- unavailable ---------------------------- */
+  if (!res.available) {
+    return (
+      <div className="grid h-full place-items-center px-6 text-center">
+        <div className="max-w-sm">
+          <div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]">
+            <Users className="h-7 w-7" />
+          </div>
+          <h2 className="text-lg font-bold text-[var(--color-navy)]">Communities are place-based</h2>
+          <p className="mt-1.5 text-sm text-[var(--color-muted)]">{res.reason}</p>
+        </div>
+      </div>
+    );
+  }
 
-  const filtered = list.filter((c) => {
-    if (query && !`${c.name} ${c.location} ${c.description}`.toLowerCase().includes(query.toLowerCase()))
-      return false;
-    if (filter === "Your communities") return c.joined;
-    if (filter === "Chapters") return c.category === "Chapter";
-    if (filter === "Wards") return c.scope === "Ward" || c.scope === "Polling Unit";
-    if (filter === "Interest") return c.category === "Interest";
-    return true;
-  });
-
-  const featured = list.find((c) => c.joined) ?? list[0];
-  const joinedCount = list.filter((c) => c.joined).length;
+  const parent = res.items.find((c) => c.scope === "state") ?? null;
+  const groups = res.items.filter((c) => c.scope !== "state");
+  const p = res.placement;
 
   return (
     <div className="h-full overflow-y-auto">
+      {open && <MembersSheet community={open} onClose={() => setOpen(null)} />}
+
       <div className="w-full px-4 py-5 lg:px-8">
-        {/* Header */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-extrabold tracking-tight text-[var(--color-navy)]">
-              Communities
-            </h1>
-            <p className="mt-1 text-sm text-[var(--color-muted)]">
-              Organized down the federation — State, LGA, Ward and Polling Unit.
+        {/* Header + placement breadcrumb */}
+        <div className="mb-4">
+          <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Your community</h1>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] font-medium text-[var(--color-ink-soft)]">
+            <MapPin className="h-3.5 w-3.5 text-[var(--color-brand-strong)]" />
+            {[p?.state && `${p.state} State`, p?.lga && `${p.lga} LGA`, p?.ward, p?.pollingUnit]
+              .filter(Boolean)
+              .map((g, i, arr) => (
+                <span key={g as string} className="flex items-center gap-1.5">
+                  <span className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5">{g}</span>
+                  {i < arr.length - 1 && <ChevronRight className="h-3 w-3 text-[var(--color-faint)]" />}
+                </span>
+              ))}
+          </div>
+          <p className="mt-2 text-[13px] text-[var(--color-muted)]">
+            You were placed in these automatically when you registered — every verified Valiant near you is here.
+          </p>
+        </div>
+
+        {/* State community — the parent (announcement channel) */}
+        {parent && <ParentCard c={parent} onOpen={() => setOpen(parent)} />}
+
+        {/* Groups inside the community */}
+        {groups.length > 0 && (
+          <>
+            <h2 className="mb-2 mt-5 text-xs font-bold uppercase tracking-wider text-[var(--color-faint)]">
+              Groups you&apos;re in
+            </h2>
+            <div className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white">
+              {groups.map((c, i) => (
+                <GroupRow key={c.id} c={c} first={i === 0} onOpen={() => setOpen(c)} />
+              ))}
+            </div>
+          </>
+        )}
+
+        <p className="mt-4 px-1 text-[11px] leading-relaxed text-[var(--color-faint)]">
+          Your placement comes from your registration (State › LGA › Ward › Polling Unit) and is verified by NIN.
+          To move groups, update your profile placement.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- parent card ----------------------------- */
+
+function ParentCard({ c, onOpen }: { c: CommunityDTO; onOpen: () => void }) {
+  const meta = SCOPE_META[c.scope];
+  const Icon = meta.icon;
+  return (
+    <div className="relative overflow-hidden rounded-3xl gradient-brand p-5 text-white shadow-sm">
+      <div className="absolute -right-10 -top-12 size-44 rounded-full bg-white/10" />
+      <div className="absolute -bottom-14 right-20 size-36 rounded-full bg-white/10" />
+      <div className="relative">
+        <div className="flex items-start gap-3.5">
+          <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white/20 ring-1 ring-white/25">
+            <Icon className="h-7 w-7" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/80">{meta.label}</div>
+            <h2 className="truncate text-xl font-extrabold tracking-tight">{c.name}</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-white/85">
+              <span className="flex items-center gap-1.5 font-semibold">
+                <Users className="h-3.5 w-3.5" /> {fmt(c.memberCount)} member{c.memberCount === 1 ? "" : "s"}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5" /> {c.controlledBy}
+              </span>
+            </div>
+          </div>
+        </div>
+        {c.description && <p className="mt-3 text-sm leading-relaxed text-white/85">{c.description}</p>}
+        <button
+          onClick={onOpen}
+          className="mt-4 flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-[var(--color-brand-strong)] shadow-sm transition hover:bg-white/90"
+        >
+          <Users className="h-4 w-4" /> View members
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ group row ------------------------------ */
+
+function GroupRow({ c, first, onOpen }: { c: CommunityDTO; first: boolean; onOpen: () => void }) {
+  const meta = SCOPE_META[c.scope];
+  const Icon = meta.icon;
+  return (
+    <button
+      onClick={onOpen}
+      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-[var(--color-surface-2)] ${
+        first ? "" : "border-t border-[var(--color-line)]"
+      }`}
+    >
+      <span
+        className="grid size-11 shrink-0 place-items-center rounded-xl"
+        style={{ backgroundColor: `color-mix(in srgb, ${meta.color} 14%, transparent)`, color: meta.color }}
+      >
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="truncate text-[15px] font-bold text-[var(--color-ink)]">{c.name}</span>
+          <span className="shrink-0 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-muted)]">
+            {meta.label}
+          </span>
+        </span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[12px] text-[var(--color-muted)]">
+          <span className="flex items-center gap-1 font-semibold text-[var(--color-ink-soft)]">
+            <Users className="h-3 w-3" /> {fmt(c.memberCount)}
+          </span>
+          <span className="flex items-center gap-1">
+            <ShieldCheck className="h-3 w-3" /> {c.controlledBy}
+          </span>
+        </span>
+      </span>
+      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-faint)]" />
+    </button>
+  );
+}
+
+/* ---------------------------- members sheet ---------------------------- */
+
+function MembersSheet({ community, onClose }: { community: CommunityDTO; onClose: () => void }) {
+  const [members, setMembers] = useState<CommunityMemberDTO[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getCommunityMembers(community.id).then((m) => { if (alive) setMembers(m); });
+    return () => { alive = false; };
+  }, [community.id]);
+
+  const meta = SCOPE_META[community.scope];
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl">
+        <div className="flex items-start gap-3 border-b border-[var(--color-line)] p-4">
+          <span
+            className="grid size-10 shrink-0 place-items-center rounded-xl"
+            style={{ backgroundColor: `color-mix(in srgb, ${meta.color} 14%, transparent)`, color: meta.color }}
+          >
+            <meta.icon className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate font-bold text-[var(--color-navy)]">{community.name}</h3>
+            <p className="text-xs text-[var(--color-muted)]">
+              {fmt(community.memberCount)} member{community.memberCount === 1 ? "" : "s"} · {community.controlledBy}
             </p>
           </div>
-          <button className="flex items-center gap-2 rounded-full gradient-brand px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:opacity-95">
-            <Plus className="h-4 w-4" /> Create community
+          <button
+            onClick={onClose}
+            className="grid size-8 shrink-0 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Quick stats */}
-        <div className="mt-5 grid grid-cols-3 gap-3">
-          <Stat icon={<Users className="h-4 w-4" />} value={String(joinedCount)} label="Joined" />
-          <Stat icon={<Compass className="h-4 w-4" />} value={String(list.length)} label="Available" />
-          <Stat icon={<TrendingUp className="h-4 w-4" />} value="4.2K" label="Active today" />
-        </div>
-
-        {/* Featured banner */}
-        {featured && (
-          <div className="relative mt-5 overflow-hidden rounded-3xl border border-[var(--color-line)]">
-            <img src={featured.cover} alt="" className="h-44 w-full object-cover sm:h-56" />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
-            <div className="absolute bottom-0 left-0 right-0 flex flex-wrap items-end justify-between gap-3 p-5">
-              <div className="min-w-0">
-                <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-brand)] px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide text-white">
-                  <TrendingUp className="h-3 w-3" /> Featured · {featured.scope}
-                </span>
-                <h2 className="mt-2 text-2xl font-extrabold text-white">{featured.name}</h2>
-                <p className="mt-1 max-w-lg text-sm text-white/80">{featured.description}</p>
-                <div className="mt-2 flex items-center gap-3 text-xs font-medium text-white/80">
-                  <span className="flex items-center gap-1">
-                    <Users className="h-3.5 w-3.5" /> {fmt(featured.members)} members
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="size-1.5 rounded-full bg-[var(--color-green)]" /> {fmt(featured.online)} online
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={() => toggleJoin(featured.id)}
-                className="shrink-0 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[var(--color-ink)] transition hover:bg-white/90"
-              >
-                {featured.joined ? "Open community" : "Join now"}
-              </button>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {!members ? (
+            <div className="grid place-items-center py-10">
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-brand)]" />
             </div>
-          </div>
-        )}
-
-        {/* Search + filters */}
-        <div className="sticky top-0 z-10 -mx-4 mt-6 bg-[var(--color-bg)] px-4 py-3 lg:-mx-8 lg:px-8">
-          <div className="relative mb-3">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search communities by name or location…"
-              className="h-11 w-full rounded-full border border-[var(--color-line)] bg-white pl-11 pr-4 text-sm outline-none transition focus:border-[var(--color-brand)] focus:ring-4 focus:ring-[var(--color-brand)]/12"
-            />
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`shrink-0 rounded-full px-4 py-1.5 text-sm font-semibold transition ${
-                  filter === f
-                    ? "bg-[var(--color-navy)] text-white"
-                    : "border border-[var(--color-line)] bg-white text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
-                }`}
-              >
-                {f}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Grid */}
-        <div className="mt-3 grid gap-4 pb-10 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((c) => (
-            <CommunityCard key={c.id} c={c} onJoin={() => toggleJoin(c.id)} />
-          ))}
-          {filtered.length === 0 && (
-            <div className="col-span-full grid place-items-center rounded-2xl border border-dashed border-[var(--color-line)] bg-white py-16 text-center">
-              <Compass className="mb-2 h-8 w-8 text-[var(--color-faint)]" />
-              <p className="text-sm text-[var(--color-muted)]">No communities match your search.</p>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; label: string }) {
-  return (
-    <div className="flex items-center gap-3 rounded-2xl border border-[var(--color-line)] bg-white px-4 py-3">
-      <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]">
-        {icon}
-      </span>
-      <div className="leading-tight">
-        <div className="text-lg font-extrabold text-[var(--color-navy)]">{value}</div>
-        <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-faint)]">{label}</div>
-      </div>
-    </div>
-  );
-}
-
-function CommunityCard({ c, onJoin }: { c: Community; onJoin: () => void }) {
-  return (
-    <div className="group flex flex-col overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white transition hover:shadow-md">
-      <div className="relative h-28 overflow-hidden">
-        <img
-          src={c.cover}
-          alt=""
-          className="size-full object-cover transition duration-500 group-hover:scale-105"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
-        <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-full bg-white/90 px-2 py-0.5 text-[11px] font-bold text-[var(--color-ink)] backdrop-blur">
-          {c.scope === "Interest" ? <Globe2 className="h-3 w-3" /> : <MapPin className="h-3 w-3" />}
-          {c.scope}
-        </span>
-        {c.unreadPosts ? (
-          <span className="absolute right-3 top-3 rounded-full bg-[var(--color-brand)] px-2 py-0.5 text-[11px] font-bold text-white">
-            {c.unreadPosts} new
-          </span>
-        ) : null}
-      </div>
-
-      <div className="flex flex-1 flex-col p-4">
-        <h3 className="text-[15px] font-bold text-[var(--color-ink)]">{c.name}</h3>
-        <p className="mt-1 line-clamp-2 flex-1 text-[13px] leading-relaxed text-[var(--color-muted)]">
-          {c.description}
-        </p>
-        <div className="mt-3 flex items-center gap-3 text-[12px] text-[var(--color-faint)]">
-          <span className="flex items-center gap-1 font-medium">
-            <Users className="h-3.5 w-3.5" /> {fmt(c.members)}
-          </span>
-          <span className="flex items-center gap-1 font-medium">
-            <span className="size-1.5 rounded-full bg-[var(--color-green)]" /> {fmt(c.online)} online
-          </span>
-        </div>
-
-        <button
-          onClick={onJoin}
-          className={`mt-3 flex items-center justify-center gap-1.5 rounded-full px-4 py-2 text-sm font-bold transition ${
-            c.joined
-              ? "border border-[var(--color-line)] bg-white text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
-              : "gradient-brand text-white hover:opacity-95"
-          }`}
-        >
-          {c.joined ? (
-            <>
-              <Check className="h-4 w-4" /> Joined
-            </>
+          ) : members.length === 0 ? (
+            <p className="py-10 text-center text-sm text-[var(--color-muted)]">No members yet.</p>
           ) : (
-            <>
-              <Plus className="h-4 w-4" /> Join
-            </>
+            members.map((m) => (
+              <div key={m.id} className="flex items-center gap-3 rounded-xl p-2.5">
+                <Avatar name={m.name} color="#e07400" size={38} />
+                <div className="min-w-0 flex-1 leading-tight">
+                  <div className="truncate text-sm font-semibold text-[var(--color-ink)]">{m.name}</div>
+                  <div className="text-xs text-[var(--color-faint)]">
+                    Joined {new Date(m.joinedAt).toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" })}
+                  </div>
+                </div>
+                {m.role !== "member" && (
+                  <span className="shrink-0 rounded-full bg-[var(--color-brand-tint)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--color-brand-strong)]">
+                    {m.role}
+                  </span>
+                )}
+              </div>
+            ))
           )}
-          {c.joined && <ChevronRight className="h-4 w-4" />}
-        </button>
+        </div>
       </div>
     </div>
   );

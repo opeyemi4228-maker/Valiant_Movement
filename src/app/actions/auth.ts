@@ -33,6 +33,7 @@ import {
   emailTaken,
   findByCredentials,
 } from "@/lib/demo-store";
+import { ensureGeoCommunities } from "@/lib/communities";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { createSession } from "@/lib/session";
 import { generateToken, hashNin, hashToken } from "@/lib/tokens";
@@ -157,6 +158,21 @@ export async function registerMember(
       error:
         "We couldn't create your account. Make sure the database is migrated and seeded, then try again.",
     };
+  }
+
+  // Auto-join the State › LGA › Ward › Polling Unit communities for this
+  // placement. Best-effort — never blocks sign-up (also self-heals on load).
+  try {
+    await ensureGeoCommunities(userId, {
+      stateId: stateRow?.id ?? null,
+      stateName: data.state,
+      lgaId: lgaRow?.id ?? null,
+      lgaName: data.lga,
+      ward: data.ward,
+      pollingUnit: data.pollingUnit,
+    });
+  } catch (err) {
+    console.warn("[registerMember] community auto-join skipped", err);
   }
 
   // Best-effort verification email — never blocks sign-up if email isn't configured.

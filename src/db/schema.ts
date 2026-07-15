@@ -167,6 +167,7 @@ export const profiles = pgTable(
     fullName: text("full_name").notNull(),
     username: text("username").unique(),
     avatarUrl: text("avatar_url"),
+    coverUrl: text("cover_url"),
     bio: text("bio"),
     stateId: uuid("state_id").references(() => states.id),
     lgaId: uuid("lga_id").references(() => lgas.id),

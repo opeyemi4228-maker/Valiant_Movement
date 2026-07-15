@@ -28,9 +28,23 @@ const DEMO_MEMBERS = [
 ];
 const DEMO_PASSWORD = "Valiant2026";
 
+/** Geo placement for the demo members — drives their auto-joined communities
+ *  (State › LGA › Ward › Polling Unit), same as a real registration. */
+const DEMO_PLACEMENT = { state: "Lagos", lga: "Ikeja", ward: "Ward 04", pollingUnit: "PU 012" };
+
 async function seedDemoMembers(db: Db) {
   const passwordHash = await hashPassword(DEMO_PASSWORD);
   const ids: string[] = [];
+
+  // Resolve the demo placement to real geo rows (seeded above).
+  const [state] = await db.select({ id: states.id }).from(states).where(eq(states.name, DEMO_PLACEMENT.state)).limit(1);
+  const [lga] = state
+    ? await db
+        .select({ id: lgas.id })
+        .from(lgas)
+        .where(and(eq(lgas.stateId, state.id), eq(lgas.name, DEMO_PLACEMENT.lga)))
+        .limit(1)
+    : [undefined];
 
   for (const m of DEMO_MEMBERS) {
     const [u] = await db
@@ -42,10 +56,19 @@ async function seedDemoMembers(db: Db) {
       })
       .returning({ id: users.id });
     ids.push(u.id);
+    const profile = {
+      fullName: m.fullName,
+      username: m.username,
+      stateId: state?.id ?? null,
+      lgaId: lga?.id ?? null,
+      ward: DEMO_PLACEMENT.ward,
+      pollingUnit: DEMO_PLACEMENT.pollingUnit,
+    };
     await db
       .insert(profiles)
-      .values({ userId: u.id, fullName: m.fullName, username: m.username })
-      .onConflictDoNothing();
+      .values({ userId: u.id, ...profile })
+      // Update so accounts seeded before placement existed get their geo.
+      .onConflictDoUpdate({ target: profiles.userId, set: profile });
   }
 
   // A starter direct conversation between them (only if one doesn't exist yet).
