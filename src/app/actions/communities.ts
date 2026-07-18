@@ -1,12 +1,14 @@
 "use server";
 
-import { getCurrentUser } from "@/lib/session";
+import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb } from "@/lib/env";
 import {
   ensureGeoCommunities,
   memberGeo,
   myCommunities,
   communityMemberList,
+  openCommunityChatFor,
+  type CommunityChatHandle,
   type CommunityDTO,
   type CommunityMemberDTO,
 } from "@/lib/communities";
@@ -21,7 +23,7 @@ export interface MyCommunitiesResult {
 }
 
 export async function getMyCommunities(): Promise<MyCommunitiesResult> {
-  const u = await getCurrentUser();
+  const u = await getCurrentUserSafe();
   if (!u) return { available: false, items: [], placement: null, reason: "Sign in to see your communities." };
   if (!usesDb(u.id)) {
     return {
@@ -59,7 +61,21 @@ export async function getMyCommunities(): Promise<MyCommunitiesResult> {
 }
 
 export async function getCommunityMembers(communityId: string): Promise<CommunityMemberDTO[]> {
-  const u = await getCurrentUser();
+  const u = await getCurrentUserSafe();
   if (!u || !usesDb(u.id)) return [];
   return communityMemberList(communityId);
+}
+
+/** Open (lazily creating) the community's WhatsApp-style group chat and seat
+ *  the signed-in member in it. Messages then flow through the normal chat
+ *  actions (getMessages / sendMessage) with the returned conversation id. */
+export async function openCommunityChat(
+  communityId: string,
+): Promise<{ ok: boolean; chat?: CommunityChatHandle; error?: string }> {
+  const u = await getCurrentUserSafe();
+  if (!u) return { ok: false, error: "Sign in to join the conversation." };
+  if (!usesDb(u.id)) {
+    return { ok: false, error: "Community chat is for registered members — the demo account has no community placement." };
+  }
+  return openCommunityChatFor(u.id, communityId);
 }

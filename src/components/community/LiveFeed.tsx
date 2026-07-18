@@ -1,7 +1,7 @@
 "use client";
 
 /* eslint-disable @next/next/no-img-element */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Heart,
   MessageCircle,
@@ -25,7 +25,8 @@ import {
   MoreHorizontal,
   Smile,
 } from "lucide-react";
-import { loadFeed, publishPost, likePost, repostPost, commentPost } from "@/app/actions/feed";
+import { loadFeed, publishPost, likePost, repostPost, commentPost, loadStories, publishStory } from "@/app/actions/feed";
+import type { StoryDTO } from "@/lib/feed-db";
 import type { FeedPost } from "@/lib/feed-types";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
 import { people, trends, suggestedPeople } from "@/data/community";
@@ -54,7 +55,7 @@ const QUICK: { label: string; template: string }[] = [
 
 /* --------------------------------- Feed --------------------------------- */
 
-export function LiveFeed({ me }: { me: { name: string } }) {
+export function LiveFeed({ me }: { me: { name: string; avatar?: string } }) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [draft, setDraft] = useState("");
@@ -62,17 +63,20 @@ export function LiveFeed({ me }: { me: { name: string } }) {
   const [posting, setPosting] = useState(false);
   const [story, setStory] = useState<number | null>(null);
   const [showEmoji, setShowEmoji] = useState(false);
-  const [myStory, setMyStory] = useState<{ media: string; caption: string } | null>(null);
+  const [myStory, setMyStory] = useState<{ media: string; caption: string } | null>(null); // demo fallback
+  const [dbStories, setDbStories] = useState<StoryDTO[]>([]);
   const [storyImg, setStoryImg] = useState<string | null>(null); // create-story preview
   const [storyCaption, setStoryCaption] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null); // focused single-post view
   const fileRef = useRef<HTMLInputElement>(null);
   const storyFileRef = useRef<HTMLInputElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const scrollTopRef = useRef<HTMLDivElement>(null);
   const firstName = me.name.split(/\s+/)[0];
 
-  // Stories shown in the rail + viewer — your own story (if posted) leads.
+  // Stories: real 24-hour member statuses (from the DB) lead; the showcase
+  // rail fills in behind them. Your own story (if live) is always first.
   const peopleStories: Story[] = STORY_PEOPLE.map((p, i) => ({
     key: p.id,
     name: p.name,
@@ -80,9 +84,18 @@ export function LiveFeed({ me }: { me: { name: string } }) {
     media: STORY_MEDIA[i % STORY_MEDIA.length],
     caption: `${p.role} · ${p.location}`,
   }));
-  const stories: Story[] = myStory
-    ? [{ key: "me", name: "You", media: myStory.media, caption: myStory.caption }, ...peopleStories]
-    : peopleStories;
+  const realStories: Story[] = dbStories.map((s) => ({
+    key: s.id,
+    name: s.mine ? "You" : s.name,
+    media: s.media,
+    caption: s.caption ?? "",
+  }));
+  const localMine: Story[] =
+    myStory && !dbStories.some((s) => s.mine)
+      ? [{ key: "me", name: "You", media: myStory.media, caption: myStory.caption }]
+      : [];
+  const stories: Story[] = [...localMine, ...realStories, ...peopleStories];
+  const hasMyStory = localMine.length > 0 || dbStories.some((s) => s.mine);
 
   async function onPickStory(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
@@ -103,21 +116,25 @@ export function LiveFeed({ me }: { me: { name: string } }) {
     ? posts.filter((p) => p.text.toLowerCase().includes(activeTag.toLowerCase()))
     : posts;
 
-  useEffect(() => {
-    let alive = true;
-    async function pull() {
-      const res = await loadFeed();
-      if (!alive) return;
+  const refresh = useCallback(async () => {
+    try {
+      const [res, s] = await Promise.all([loadFeed(), loadStories()]);
       setPosts(res.posts);
+      setDbStories(s);
       setLoaded(true);
+    } catch {
+      /* transient — the next poll recovers */
     }
-    pull();
-    const t = setInterval(pull, 2500);
+  }, []);
+
+  useEffect(() => {
+    const kick = setTimeout(refresh, 0); // after paint — no sync setState in the effect
+    const t = setInterval(refresh, 2500);
     return () => {
-      alive = false;
+      clearTimeout(kick);
       clearInterval(t);
     };
-  }, []);
+  }, [refresh]);
 
   function upsert(post: FeedPost) {
     setPosts((prev) => prev.map((p) => (p.id === post.id ? post : p)));
@@ -128,12 +145,12 @@ export function LiveFeed({ me }: { me: { name: string } }) {
     if ((!text && !image) || posting) return;
     setPosting(true);
     const res = await publishPost(text, image ?? undefined);
-    setPosting(false);
-    if (res.ok && res.post) {
-      setPosts((prev) => [res.post!, ...prev.filter((p) => p.id !== res.post!.id)]);
+    if (res.ok) {
       setDraft("");
       setImage(null);
+      await refresh(); // the persisted post comes straight back from the DB
     }
+    setPosting(false);
   }
 
   async function onLike(id: string) {
@@ -141,7 +158,7 @@ export function LiveFeed({ me }: { me: { name: string } }) {
       prev.map((p) => (p.id === id ? { ...p, liked: !p.liked, likes: p.likes + (p.liked ? -1 : 1) } : p)),
     );
     const res = await likePost(id);
-    if (res.ok && res.post) upsert(res.post);
+    if (res.ok && res.post) upsert(res.post); // demo returns the post; DB reconciles on poll
   }
 
   async function onRepost(id: string) {
@@ -154,7 +171,10 @@ export function LiveFeed({ me }: { me: { name: string } }) {
 
   async function onComment(id: string, text: string) {
     const res = await commentPost(id, text);
-    if (res.ok && res.post) upsert(res.post);
+    if (res.ok) {
+      if (res.post) upsert(res.post);
+      else await refresh();
+    }
   }
 
   function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
@@ -166,8 +186,26 @@ export function LiveFeed({ me }: { me: { name: string } }) {
     reader.readAsDataURL(f);
   }
 
+  const focusPost = focusId ? posts.find((p) => p.id === focusId) ?? null : null;
+
   return (
     <div className="no-scrollbar h-full overflow-y-auto">
+      {/* Focused single-post view — just this post and its conversation */}
+      {focusPost && (
+        <div className="fixed inset-0 z-[55] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:p-6">
+          <div className="absolute inset-0" onClick={() => setFocusId(null)} />
+          <div className="relative my-auto w-full max-w-[640px]">
+            <button
+              onClick={() => setFocusId(null)}
+              aria-label="Close post"
+              className="absolute -top-2 right-0 z-10 grid size-9 -translate-y-full place-items-center rounded-full bg-white text-[var(--color-ink)] shadow-lg transition hover:bg-[var(--color-surface-2)]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+            <PostCard post={focusPost} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} expanded />
+          </div>
+        </div>
+      )}
       {story !== null && (
         <StoryViewer stories={stories} start={story} onClose={() => setStory(null)} />
       )}
@@ -177,10 +215,16 @@ export function LiveFeed({ me }: { me: { name: string } }) {
           caption={storyCaption}
           onCaption={setStoryCaption}
           onCancel={() => { setStoryImg(null); setStoryCaption(""); }}
-          onShare={() => {
-            setMyStory({ media: storyImg, caption: storyCaption.trim() || "Courage to lead. 🦅 #ValiantMovement" });
+          onShare={async () => {
+            const caption = storyCaption.trim() || "Courage to lead. 🦅 #ValiantMovement";
+            const media = storyImg;
             setStoryImg(null);
             setStoryCaption("");
+            // Persist (24-hour lifetime, visible to every member). Demo
+            // sessions fall back to a local story.
+            const res = await publishStory(media, caption);
+            if (res.ok) await refresh();
+            else setMyStory({ media, caption });
             setStory(0); // play it back immediately
           }}
         />
@@ -204,7 +248,7 @@ export function LiveFeed({ me }: { me: { name: string } }) {
           {/* Stories */}
           <Stories
             me={me}
-            hasMyStory={!!myStory}
+            hasMyStory={hasMyStory}
             onView={setStory}
             onCreate={() => storyFileRef.current?.click()}
           />
@@ -212,7 +256,7 @@ export function LiveFeed({ me }: { me: { name: string } }) {
           {/* Composer */}
           <div className="mt-3 rounded-2xl border border-[var(--color-line)] bg-white p-3.5">
             <div className="flex gap-3">
-              <Avatar name={me.name} color="#e07400" size={42} />
+              <Avatar name={me.name} color="#e07400" photo={me.avatar} size={42} />
               <div className="min-w-0 flex-1">
                 <textarea
                   ref={composerRef}
@@ -302,7 +346,26 @@ export function LiveFeed({ me }: { me: { name: string } }) {
               </div>
             )}
             {!loaded && (
-              <div className="grid place-items-center py-14 text-sm text-[var(--color-faint)]">Loading the movement…</div>
+              <>
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="animate-pulse rounded-2xl border border-[var(--color-line)] bg-white p-4">
+                    <div className="flex items-start gap-3">
+                      <span className="size-11 shrink-0 rounded-full bg-[var(--color-surface-2)]" />
+                      <div className="min-w-0 flex-1 space-y-2.5 pt-1">
+                        <div className="h-3.5 w-40 rounded-full bg-[var(--color-surface-2)]" />
+                        <div className="h-3 w-full rounded-full bg-[var(--color-surface-2)]" />
+                        <div className="h-3 w-4/5 rounded-full bg-[var(--color-surface-2)]" />
+                        {i === 1 && <div className="h-40 w-full rounded-xl bg-[var(--color-surface-2)]" />}
+                        <div className="flex gap-6 pt-1">
+                          <div className="h-3 w-10 rounded-full bg-[var(--color-surface-2)]" />
+                          <div className="h-3 w-10 rounded-full bg-[var(--color-surface-2)]" />
+                          <div className="h-3 w-10 rounded-full bg-[var(--color-surface-2)]" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </>
             )}
             {loaded && visiblePosts.length === 0 && (
               <div className="grid place-items-center rounded-2xl border border-dashed border-[var(--color-line)] bg-white py-14 text-center">
@@ -325,7 +388,17 @@ export function LiveFeed({ me }: { me: { name: string } }) {
               </div>
             )}
             {visiblePosts.map((post) => (
-              <PostCard key={post.id} post={post} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} />
+              <div
+                key={post.id}
+                onClick={(e) => {
+                  // open the focused view unless an interactive element was hit
+                  if ((e.target as HTMLElement).closest("button, a, textarea, input")) return;
+                  setFocusId(post.id);
+                }}
+                className="cursor-pointer"
+              >
+                <PostCard post={post} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} />
+              </div>
             ))}
             {loaded && visiblePosts.length > 0 && (
               <div className="grid place-items-center py-6 text-sm text-[var(--color-faint)]">
@@ -388,7 +461,7 @@ function Stories({
   onView,
   onCreate,
 }: {
-  me: { name: string };
+  me: { name: string; avatar?: string };
   hasMyStory: boolean;
   onView: (i: number) => void;
   onCreate: () => void;
@@ -408,12 +481,12 @@ function Stories({
             {hasMyStory ? (
               <span className="block rounded-full bg-gradient-to-tr from-[var(--color-brand)] via-[#f25fb0] to-[var(--color-amber)] p-[2.5px]">
                 <span className="block rounded-full bg-white p-[2px]">
-                  <Avatar name={me.name} color="#e07400" size={52} />
+                  <Avatar name={me.name} color="#e07400" photo={me.avatar} size={52} />
                 </span>
               </span>
             ) : (
               <span className="grid size-16 place-items-center rounded-full bg-[var(--color-surface-2)] ring-2 ring-[var(--color-line)]">
-                <Avatar name={me.name} color="#e07400" size={56} />
+                <Avatar name={me.name} color="#e07400" photo={me.avatar} size={56} />
               </span>
             )}
           </button>
@@ -555,14 +628,17 @@ function PostCard({
   onLike,
   onRepost,
   onComment,
+  expanded = false,
 }: {
   post: FeedPost;
-  me: { name: string };
+  me: { name: string; avatar?: string };
   onLike: (id: string) => void;
   onRepost: (id: string) => void;
   onComment: (id: string, text: string) => void;
+  /** Focused single-post view — the conversation is open from the start. */
+  expanded?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(expanded);
   const [comment, setComment] = useState("");
   const [burst, setBurst] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
@@ -673,7 +749,7 @@ function PostCard({
             <div className="space-y-2.5">
               {post.comments.map((c) => (
                 <div key={c.id} className="flex gap-2.5">
-                  <Avatar name={c.authorName} color={c.authorColor} size={30} />
+                  <Avatar name={c.authorName} color={c.authorColor} photo={c.authorPhoto} size={30} />
                   <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[var(--color-surface-2)] px-3 py-2">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[13px] font-bold text-[var(--color-ink)]">{c.authorName}</span>
@@ -686,7 +762,7 @@ function PostCard({
             </div>
 
             <div className="mt-2.5 flex items-center gap-2">
-              <Avatar name={me.name} color="#e07400" size={30} />
+              <Avatar name={me.name} color="#e07400" photo={me.avatar} size={30} />
               <div className="relative flex flex-1 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-surface-2)] pr-1 transition focus-within:border-[var(--color-brand)] focus-within:bg-white">
                 <input
                   value={comment}

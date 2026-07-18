@@ -1,6 +1,6 @@
 "use server";
 
-import { getCurrentUser } from "@/lib/session";
+import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb } from "@/lib/env";
 import * as mem from "@/lib/demo-store";
 import * as cdb from "@/lib/call-db";
@@ -20,7 +20,7 @@ import type { CallSignal, CallMode } from "@/lib/call-types";
    ============================================================ */
 
 async function me(): Promise<string | null> {
-  const u = await getCurrentUser();
+  const u = await getCurrentUserSafe();
   return u?.id ?? null;
 }
 

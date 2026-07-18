@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ensureDuesNotifications, notifyFinanceEvent } from "@/app/actions/finance";
 import {
   Wallet,
   HeartHandshake,
@@ -78,7 +79,15 @@ export function MemberFinance({ name }: { name: string }) {
     return { deposited, withdrawn, given };
   }, [txs]);
 
+  // Run the monthly-dues clock (reminders 5→1 days out, then deduction or an
+  // insufficient-funds notice). Deduped server-side to one alert per day.
+  useEffect(() => {
+    ensureDuesNotifications(balance).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function handleConfirm(mode: "deposit" | "withdrawal", amount: number, detail: string) {
+    notifyFinanceEvent(mode, amount, detail).catch(() => {}); // bell confirmation
     setBalance((b) => b + (mode === "deposit" ? amount : -amount));
     setTxs((prev) => [
       {

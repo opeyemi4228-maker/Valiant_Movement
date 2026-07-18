@@ -1,70 +1,162 @@
 "use server";
 
-import { getCurrentUser } from "@/lib/session";
+import { getCurrentUserSafe } from "@/lib/session";
+import { usesDb } from "@/lib/env";
+import { withRetry } from "@/lib/retry";
 import * as mem from "@/lib/demo-store";
+import * as fdb from "@/lib/feed-db";
 import { notify } from "@/lib/notify";
 import type { FeedPost } from "@/lib/feed-types";
+import type { StoryDTO } from "@/lib/feed-db";
+import { db } from "@/db";
+import { users } from "@/db/schema";
+import { ne } from "drizzle-orm";
 
 /* ============================================================
-   Live feed — posts, likes, reposts and comments shared via the
-   in-memory store, so two signed-in members (across two browser
-   profiles on the same dev server) see each other's activity in
-   real time. Swap for a `posts` table when the DB is connected.
+   Live feed — Postgres for real members (posts persist across
+   restarts; stories live 24h), the in-memory store for demo
+   sessions. Publishing fans a "new post" notification out to
+   other members.
    ============================================================ */
 
-async function me(): Promise<string | null> {
-  const u = await getCurrentUser();
+async function me(): Promise<{ id: string; name: string; avatar: string | null } | null> {
+  const u = await getCurrentUserSafe();
   if (!u) return null;
-  mem.ensureMember(u.id, u.fullName ?? "Member");
-  return u.id;
+  // Refresh the mirror so name/avatar edits propagate into demo surfaces.
+  mem.ensureMember(u.id, u.fullName ?? "Member", u.avatarUrl);
+  return { id: u.id, name: u.fullName ?? "Member", avatar: u.avatarUrl };
 }
 
 export async function loadFeed(): Promise<{ available: boolean; posts: FeedPost[] }> {
-  const id = await me();
-  if (!id) return { available: false, posts: [] };
-  return { available: true, posts: mem.listPosts(id) };
+  const u = await me();
+  if (!u) return { available: false, posts: [] };
+  if (!usesDb(u.id)) return { available: true, posts: mem.listPosts(u.id) };
+  try {
+    return { available: true, posts: await withRetry(() => fdb.listPosts(u.id)) };
+  } catch (err) {
+    console.error("loadFeed failed:", err);
+    return { available: false, posts: [] };
+  }
 }
 
-export async function publishPost(text: string, image?: string): Promise<{ ok: boolean; post?: FeedPost; error?: string }> {
-  const id = await me();
-  if (!id) return { ok: false, error: "Sign in to post." };
+/** Fan a "new post" alert out to other members (best-effort, capped). */
+async function announcePost(authorId: string, authorName: string): Promise<void> {
+  try {
+    const others = usesDb(authorId)
+      ? await db.select({ id: users.id }).from(users).where(ne(users.id, authorId)).limit(100)
+      : mem.listMembers(authorId).map((m) => ({ id: m.id }));
+    await Promise.all(
+      others.map((o) =>
+        notify(o.id, {
+          type: "post",
+          actorId: authorId,
+          actorName: authorName,
+          body: `${authorName} shared a new post`,
+          href: "home",
+        }),
+      ),
+    );
+  } catch (err) {
+    console.error("announcePost failed:", err);
+  }
+}
+
+export async function publishPost(text: string, image?: string): Promise<{ ok: boolean; error?: string }> {
+  const u = await me();
+  if (!u) return { ok: false, error: "Sign in to post." };
   if (!text.trim() && !image) return { ok: false, error: "empty" };
-  return { ok: true, post: mem.addPost(id, text, image) };
+  if (image && image.length > 1_500_000) return { ok: false, error: "That image is too large." };
+  if (usesDb(u.id)) await fdb.addPost(u.id, text, image);
+  else mem.addPost(u.id, text, image);
+  await announcePost(u.id, u.name);
+  return { ok: true };
 }
 
 export async function likePost(postId: string): Promise<{ ok: boolean; post?: FeedPost }> {
-  const id = await me();
-  if (!id) return { ok: false };
-  const post = mem.toggleLike(id, postId);
-  if (post && post.liked && post.authorId !== id) {
-    const u = await getCurrentUser();
-    const who = u?.fullName ?? "A member";
-    await notify(post.authorId, { type: "like", actorId: id, actorName: who, body: `${who} liked your post`, href: "home" });
+  const u = await me();
+  if (!u) return { ok: false };
+  if (usesDb(u.id)) {
+    const res = await fdb.toggleLike(u.id, postId);
+    if (!res) return { ok: false };
+    if (res.liked && res.authorId !== u.id) {
+      await notify(res.authorId, {
+        type: "like",
+        actorId: u.id,
+        actorName: u.name,
+        body: `${u.name} liked your post`,
+        href: "home",
+      });
+    }
+    return { ok: true };
+  }
+  const post = mem.toggleLike(u.id, postId);
+  if (post && post.liked && post.authorId !== u.id) {
+    await notify(post.authorId, { type: "like", actorId: u.id, actorName: u.name, body: `${u.name} liked your post`, href: "home" });
   }
   return post ? { ok: true, post } : { ok: false };
 }
 
 export async function repostPost(postId: string): Promise<{ ok: boolean; post?: FeedPost }> {
-  const id = await me();
-  if (!id) return { ok: false };
-  const post = mem.toggleRepost(id, postId);
+  const u = await me();
+  if (!u) return { ok: false };
+  if (usesDb(u.id)) {
+    const res = await fdb.toggleRepost(u.id, postId);
+    return res === null ? { ok: false } : { ok: true };
+  }
+  const post = mem.toggleRepost(u.id, postId);
   return post ? { ok: true, post } : { ok: false };
 }
 
 export async function commentPost(postId: string, text: string): Promise<{ ok: boolean; post?: FeedPost }> {
-  const id = await me();
-  if (!id) return { ok: false };
-  const post = mem.addComment(id, postId, text);
-  if (post && post.authorId !== id) {
-    const u = await getCurrentUser();
-    const who = u?.fullName ?? "A member";
+  const u = await me();
+  if (!u || !text.trim()) return { ok: false };
+  if (usesDb(u.id)) {
+    const res = await fdb.addComment(u.id, postId, text);
+    if (!res) return { ok: false };
+    if (res.authorId !== u.id) {
+      await notify(res.authorId, {
+        type: "comment",
+        actorId: u.id,
+        actorName: u.name,
+        body: `${u.name} commented: "${text.trim().slice(0, 60)}"`,
+        href: "home",
+      });
+    }
+    return { ok: true };
+  }
+  const post = mem.addComment(u.id, postId, text);
+  if (post && post.authorId !== u.id) {
     await notify(post.authorId, {
       type: "comment",
-      actorId: id,
-      actorName: who,
-      body: `${who} commented: "${text.trim().slice(0, 60)}"`,
+      actorId: u.id,
+      actorName: u.name,
+      body: `${u.name} commented: "${text.trim().slice(0, 60)}"`,
       href: "home",
     });
   }
   return post ? { ok: true, post } : { ok: false };
+}
+
+/* ------------------------------- stories ------------------------------- */
+
+export async function loadStories(): Promise<StoryDTO[]> {
+  const u = await me();
+  if (!u || !usesDb(u.id)) return [];
+  try {
+    return await fdb.listStories(u.id);
+  } catch (err) {
+    console.error("loadStories failed:", err);
+    return [];
+  }
+}
+
+export async function publishStory(media: string, caption?: string): Promise<{ ok: boolean; error?: string }> {
+  const u = await me();
+  if (!u) return { ok: false, error: "Sign in to post a status." };
+  if (!media.startsWith("data:image/") || media.length > 1_500_000) {
+    return { ok: false, error: "That image is too large." };
+  }
+  if (!usesDb(u.id)) return { ok: false, error: "Status posts are for registered members." };
+  await fdb.addStory(u.id, media, caption);
+  return { ok: true };
 }

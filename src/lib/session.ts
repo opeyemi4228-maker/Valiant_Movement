@@ -51,6 +51,7 @@ export interface CurrentUser {
   status: string;
   emailVerified: boolean;
   fullName: string | null;
+  avatarUrl: string | null;
 }
 
 /** Returns the signed-in user (validating the session token + expiry), or null. */
@@ -67,6 +68,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
         status: "active",
         emailVerified: true,
         fullName: local.fullName,
+        avatarUrl: local.avatar ?? null,
       };
     }
     const demo = await getDemoMemberSession();
@@ -77,6 +79,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
         status: demo.status,
         emailVerified: true,
         fullName: demo.fullName,
+        avatarUrl: null,
       };
     }
     return null;
@@ -87,14 +90,17 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   if (!token) return null;
 
   // Retry the lookup so a Neon cold-start blip doesn't crash the page.
-  const rows = await withRetry(() =>
-    db
+  // 5 attempts (~4.5s of backoff) outlasts all but the coldest starts.
+  const rows = await withRetry(
+    () =>
+      db
       .select({
         id: users.id,
         email: users.email,
         status: users.status,
         emailVerified: users.emailVerified,
         fullName: profiles.fullName,
+        avatarUrl: profiles.avatarUrl,
       })
       .from(sessions)
       .innerJoin(users, eq(sessions.userId, users.id))
@@ -106,7 +112,23 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
         ),
       )
       .limit(1),
+    5,
   );
 
   return rows[0] ?? null;
+}
+
+/**
+ * getCurrentUser for read/load/poll paths: a hard transient failure (DB
+ * unreachable beyond the retry budget) degrades to "signed out for this
+ * request" instead of crashing the page — the next request recovers.
+ * Mutating actions should keep using getCurrentUser and surface the error.
+ */
+export async function getCurrentUserSafe(): Promise<CurrentUser | null> {
+  try {
+    return await getCurrentUser();
+  } catch (err) {
+    console.error("getCurrentUserSafe: session lookup failed:", err);
+    return null;
+  }
 }

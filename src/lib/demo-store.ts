@@ -81,6 +81,7 @@ export interface ProfileDTO {
   lga: string;
   ward: string;
   pollingUnit: string;
+  memberSince: string | null; // ISO
 }
 
 export interface ProfilePatch {
@@ -137,6 +138,7 @@ interface Store {
   alerts: ModerationAlert[];
   rtc: Map<string, CallRtc>;
   notifs: NotifRow[];
+  reports?: MemberReport[];
 }
 
 interface NotifRow {
@@ -273,7 +275,7 @@ export function emailTaken(email: string): boolean {
 }
 
 /** Ensure a member row exists for an id (e.g. a DB user using the demo feed). */
-export function ensureMember(id: string, fullName: string): Member {
+export function ensureMember(id: string, fullName: string, avatar?: string | null): Member {
   const s = store();
   let m = s.members.get(id);
   if (!m) {
@@ -287,6 +289,10 @@ export function ensureMember(id: string, fullName: string): Member {
     };
     s.members.set(id, m);
   }
+  // Keep the mirror fresh so DB members' name/photo changes propagate into
+  // surfaces served from this store (feed, stories).
+  if (fullName && m.fullName !== fullName) m.fullName = fullName;
+  if (avatar !== undefined && (avatar ?? undefined) !== m.avatar) m.avatar = avatar ?? undefined;
   return m;
 }
 
@@ -306,7 +312,44 @@ export function getProfileDTO(id: string): ProfileDTO | null {
     lga: m.lga ?? "",
     ward: m.ward ?? "",
     pollingUnit: m.pollingUnit ?? "",
+    memberSince: null,
   };
+}
+
+/* --------------------------- member reports --------------------------- */
+
+interface MemberReport {
+  id: string;
+  reporterId: string;
+  reportedId: string;
+  category: string;
+  details: string | null;
+  status: "open" | "reviewing" | "resolved" | "dismissed";
+  at: number;
+}
+
+export function addMemberReport(input: {
+  reporterId: string;
+  reportedId: string;
+  category: string;
+  details?: string | null;
+}): { ok: boolean; error?: string } {
+  const s = store();
+  s.reports ??= [];
+  const dup = s.reports.find(
+    (r) => r.reporterId === input.reporterId && r.reportedId === input.reportedId && r.status === "open",
+  );
+  if (dup) return { ok: false, error: "already-reported" };
+  s.reports.push({
+    id: "rep_" + randomUUID().slice(0, 8),
+    reporterId: input.reporterId,
+    reportedId: input.reportedId,
+    category: input.category,
+    details: input.details ?? null,
+    status: "open",
+    at: Date.now(),
+  });
+  return { ok: true };
 }
 
 export function updateProfile(id: string, patch: ProfilePatch): Member | null {
@@ -352,7 +395,7 @@ function memberName(id: string): string {
 export function listMembers(meId: string): ChatMember[] {
   return [...store().members.values()]
     .filter((m) => m.id !== meId)
-    .map((m) => ({ id: m.id, name: m.fullName, username: m.username, email: m.email }));
+    .map((m) => ({ id: m.id, name: m.fullName, username: m.username, email: m.email, avatar: m.avatar ?? null }));
 }
 
 export function conversationsFor(meId: string): ChatConversation[] {
@@ -367,7 +410,9 @@ export function conversationsFor(meId: string): ChatConversation[] {
     const unread = msgs.filter((m) => m.senderId !== meId && m.at > lastRead).length;
     result.push({
       id: convo.id,
+      type: "direct",
       otherId,
+      otherAvatar: otherId ? s.members.get(otherId)?.avatar ?? null : null,
       title: otherId ? memberName(otherId) : "Conversation",
       lastBody: last?.body ?? null,
       lastHasMedia: !!last?.media,
@@ -419,7 +464,9 @@ export function getMessages(
       id: m.id,
       body: m.body,
       mine: m.senderId === meId,
+      senderId: m.senderId,
       senderName: m.senderId === meId ? "You" : memberName(m.senderId),
+      senderAvatar: s.members.get(m.senderId)?.avatar ?? null,
       media: m.media,
       at: new Date(m.at).toISOString(),
     })),
@@ -430,7 +477,9 @@ export function sendMessage(meId: string, convId: string, body: string, media?: 
   if (!isMember(convId, meId)) return { ok: false, error: "forbidden" };
   const text = body.trim().slice(0, 4000);
   if (!text && !media) return { ok: false, error: "empty" };
-  if (media?.kind === "call") return { ok: false, error: "forbidden" }; // call events are store-authored only
+  if (media?.kind === "call" || media?.kind === "system") {
+    return { ok: false, error: "forbidden" }; // store-authored kinds only
+  }
   const s = store();
   const msg: Msg = { id: "msg_" + randomUUID().slice(0, 8), convId, senderId: meId, body: text || null, media: media ?? null, at: Date.now() };
   s.messages.push(msg);
@@ -438,7 +487,7 @@ export function sendMessage(meId: string, convId: string, body: string, media?: 
   convo.lastRead[meId] = Date.now();
   return {
     ok: true,
-    message: { id: msg.id, body: msg.body, mine: true, senderName: "You", media: msg.media, at: new Date(msg.at).toISOString() },
+    message: { id: msg.id, body: msg.body, mine: true, senderId: meId, senderName: "You", senderAvatar: null, media: msg.media, at: new Date(msg.at).toISOString() },
   };
 }
 
@@ -456,6 +505,7 @@ function toPostDTO(meId: string, p: Store["posts"][number]): FeedPost {
     authorId: p.authorId,
     authorName: author?.fullName ?? "Member",
     authorColor: author?.color ?? "#7a7068",
+    authorPhoto: author?.avatar,
     text: p.text,
     image: p.image,
     community: p.community,
@@ -468,7 +518,7 @@ function toPostDTO(meId: string, p: Store["posts"][number]): FeedPost {
       .sort((a, b) => a.at - b.at)
       .map((c) => {
         const a = store().members.get(c.authorId);
-        return { id: c.id, authorId: c.authorId, authorName: a?.fullName ?? "Member", authorColor: a?.color ?? "#7a7068", text: c.text, at: new Date(c.at).toISOString() };
+        return { id: c.id, authorId: c.authorId, authorName: a?.fullName ?? "Member", authorColor: a?.color ?? "#7a7068", authorPhoto: a?.avatar, text: c.text, at: new Date(c.at).toISOString() };
       }),
   };
 }

@@ -22,7 +22,7 @@ import {
   Hand,
   MoreHorizontal,
 } from "lucide-react";
-import { sendOffer, sendAnswer, sendIce, getSignal } from "@/app/actions/realtime";
+import { sendOffer, sendAnswer, sendIce, getSignal, hangupCall } from "@/app/actions/realtime";
 
 /* ----------------------- Web Speech API typings ----------------------- */
 
@@ -92,7 +92,16 @@ function initials(name: string) {
 
 /* ------------------------------- CallRoom ------------------------------- */
 
-export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () => void }) {
+export function CallRoom({
+  config,
+  onClose,
+  remoteEnded = false,
+}: {
+  config: CallConfig;
+  onClose: () => void;
+  /** The other party hung up — wind the room down and show the summary. */
+  remoteEnded?: boolean;
+}) {
   const isVideo = config.mode === "video";
   const isMeeting = config.kind === "meeting";
   const participants = useMemo(
@@ -122,6 +131,8 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
   const [remoteHasVideo, setRemoteHasVideo] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
+  const [didRecord, setDidRecord] = useState(false); // any recording happened this call
+  const [endedByPeer, setEndedByPeer] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const shareRef = useRef<HTMLVideoElement>(null);
@@ -616,12 +627,14 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
     recorderRef.current = rec;
     rec.start();
     setRecording(true);
+    setDidRecord(true);
     setRecSeconds(0);
     recTimerRef.current = setInterval(() => setRecSeconds((s) => s + 1), 1000);
     flash("Recording started");
   }
 
-  function endCall() {
+  function endCall(byPeer = false) {
+    if (status === "ended") return;
     if (recording) { try { recorderRef.current?.stop(); } catch { /* ignore */ } }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     shareStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -629,8 +642,22 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
     recogRef.current = null;
     try { pcRef.current?.close(); } catch { /* ignore */ }
     pcRef.current = null;
+    setEndedByPeer(byPeer);
     setStatus("ended");
+    // Tell the server IMMEDIATELY (not on summary dismissal) so the other
+    // side's poller drops their room within seconds.
+    if (!byPeer && isPeer && config.callId) hangupCall(config.callId).catch(() => {});
   }
+
+  /* ---- the other party hung up: wind down and show the summary ---- */
+  useEffect(() => {
+    if (!remoteEnded) return;
+    // Deferred so the media teardown + state flip happen after the render
+    // that delivered the prop (avoids a sync cascading render).
+    const t = setTimeout(() => endCall(true), 0);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteEnded]);
 
   // bind the captured screen to the share <video> once it mounts
   useEffect(() => {
@@ -641,7 +668,16 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
 
   /* ---- ended summary ---- */
   if (status === "ended") {
-    return <EndedSummary config={config} duration={seconds} lines={transcript} onClose={onClose} />;
+    return (
+      <EndedSummary
+        config={config}
+        duration={seconds}
+        lines={isMeeting ? transcript : []}
+        recorded={didRecord}
+        byPeer={endedByPeer}
+        onClose={onClose}
+      />
+    );
   }
 
   return (
@@ -689,7 +725,7 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
               <ShieldCheck className="h-3 w-3 text-[var(--color-green)]" /> Private · not recorded
             </span>
           )}
-          <button onClick={endCall} className="grid size-9 place-items-center rounded-full bg-white/10 transition hover:bg-white/20">
+          <button onClick={() => endCall()} className="grid size-9 place-items-center rounded-full bg-white/10 transition hover:bg-white/20">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -833,7 +869,7 @@ export function CallRoom({ config, onClose }: { config: CallConfig; onClose: () 
         </div>
 
         <button
-          onClick={endCall}
+          onClick={() => endCall()}
           className="ml-1 flex h-12 items-center gap-2 rounded-full bg-[var(--color-danger)] px-6 font-bold text-white shadow-lg transition hover:opacity-90"
         >
           <PhoneOff className="h-5 w-5" /> <span className="hidden sm:inline">End</span>
@@ -1095,13 +1131,19 @@ function EndedSummary({
   config,
   duration,
   lines,
+  recorded,
+  byPeer,
   onClose,
 }: {
   config: CallConfig;
   duration: number;
   lines: TranscriptLine[];
+  recorded: boolean;
+  byPeer: boolean;
   onClose: () => void;
 }) {
+  const hasTranscript = lines.length > 0;
+
   function download() {
     const header = `${config.title}\n${config.subtitle ?? ""}\nDuration: ${fmtDuration(duration)}\n${"=".repeat(40)}\n\n`;
     const body = lines.map((l) => `[${l.at}] ${l.speaker}: ${l.text}`).join("\n");
@@ -1120,33 +1162,47 @@ function EndedSummary({
         <div className="mx-auto grid size-14 place-items-center rounded-full bg-[var(--color-danger)]/20 text-[var(--color-danger)]">
           <PhoneOff className="h-7 w-7" />
         </div>
-        <h2 className="mt-4 text-center text-xl font-extrabold">Call ended</h2>
-        <p className="mt-1 text-center text-sm text-white/60">{config.title} · {fmtDuration(duration)}</p>
+        <h2 className="mt-4 text-center text-xl font-extrabold">
+          {byPeer ? `${config.title} ended the call` : "Call ended"}
+        </h2>
+        <p className="mt-1 text-center text-sm text-white/60">
+          {config.title} · {fmtDuration(duration)}
+        </p>
 
-        <div className="mt-5 rounded-2xl bg-white/[0.05] p-4 ring-1 ring-white/10">
-          <div className="flex items-center gap-2 text-sm font-bold">
-            <FileText className="h-4 w-4 text-[var(--color-brand)]" /> Transcript saved for records
-          </div>
-          <p className="mt-1 text-xs text-white/55">
-            {lines.length} lines captured by automatic speech-to-text. Stored to the meeting record.
-          </p>
-          {lines.length > 0 && (
+        {/* Transcript card — meetings that actually captured lines */}
+        {hasTranscript && (
+          <div className="mt-5 rounded-2xl bg-white/[0.05] p-4 ring-1 ring-white/10">
+            <div className="flex items-center gap-2 text-sm font-bold">
+              <FileText className="h-4 w-4 text-[var(--color-brand)]" /> Transcript saved for records
+            </div>
+            <p className="mt-1 text-xs text-white/55">
+              {lines.length} lines captured by automatic speech-to-text. Stored to the meeting record.
+            </p>
             <div className="mt-3 max-h-28 space-y-1.5 overflow-y-auto text-[12px] text-white/60">
               {lines.slice(-4).map((l) => (
                 <div key={l.id}><span className="font-semibold text-white/80">{l.speaker}:</span> {l.text}</div>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {/* Recording note — only if the record button was actually used */}
+        {recorded && (
+          <div className="mt-5 flex items-center gap-2.5 rounded-2xl bg-white/[0.05] p-4 text-sm ring-1 ring-white/10">
+            <Circle className="h-4 w-4 shrink-0 fill-[var(--color-danger)] text-[var(--color-danger)]" />
+            <span className="text-white/75">Your audio recording was saved to your device.</span>
+          </div>
+        )}
 
         <div className="mt-5 flex gap-2">
-          <button
-            onClick={download}
-            disabled={lines.length === 0}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-white/10 py-3 text-sm font-bold transition hover:bg-white/20 disabled:opacity-40"
-          >
-            <Download className="h-4 w-4" /> Download
-          </button>
+          {hasTranscript && (
+            <button
+              onClick={download}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-white/10 py-3 text-sm font-bold transition hover:bg-white/20"
+            >
+              <Download className="h-4 w-4" /> Download
+            </button>
+          )}
           <button onClick={onClose} className="flex-1 rounded-xl gradient-brand py-3 text-sm font-bold text-white transition hover:opacity-95">
             Done
           </button>

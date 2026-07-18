@@ -8,7 +8,11 @@ export type NotifType =
   | "mention"
   | "call"
   | "system"
-  | "verified";
+  | "verified"
+  | "message" // unread direct message
+  | "post" // a member shared a new post
+  | "finance" // deposit / withdrawal confirmations
+  | "dues"; // monthly dues countdown, deduction, insufficient funds
 
 export interface NotificationDTO {
   id: string;

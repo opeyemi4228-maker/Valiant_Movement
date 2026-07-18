@@ -5,6 +5,7 @@ export interface FeedComment {
   authorId: string;
   authorName: string;
   authorColor: string;
+  authorPhoto?: string;
   text: string;
   at: string;
 }

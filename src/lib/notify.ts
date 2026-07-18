@@ -36,6 +36,45 @@ export async function notify(userId: string, input: NotifInput): Promise<void> {
   }
 }
 
+/**
+ * Has `userId` already received a notification like this recently? Used to
+ * throttle repeat alerts (per-sender message pings, daily dues reminders).
+ */
+export async function hasRecentNotif(
+  userId: string,
+  type: NotifType,
+  opts: { actorId?: string; bodyPrefix?: string; withinMs: number },
+): Promise<boolean> {
+  const cutoff = new Date(Date.now() - opts.withinMs);
+  try {
+    if (usesDb(userId)) {
+      const conditions = [
+        eq(notifications.userId, userId),
+        eq(notifications.type, type),
+        sql`${notifications.createdAt} > ${cutoff}`,
+      ];
+      if (opts.actorId && UUID_RE.test(opts.actorId)) conditions.push(eq(notifications.actorId, opts.actorId));
+      if (opts.bodyPrefix) conditions.push(sql`${notifications.body} LIKE ${opts.bodyPrefix + "%"}`);
+      const [row] = await db
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(and(...conditions))
+        .limit(1);
+      return !!row;
+    }
+    return mem
+      .listNotifications(userId)
+      .some(
+        (n) =>
+          n.type === type &&
+          new Date(n.at).getTime() > cutoff.getTime() &&
+          (!opts.bodyPrefix || n.body.startsWith(opts.bodyPrefix)),
+      );
+  } catch {
+    return true; // on doubt, stay quiet rather than spam
+  }
+}
+
 export async function listNotifications(userId: string): Promise<NotificationDTO[]> {
   if (usesDb(userId)) {
     const rows = await db

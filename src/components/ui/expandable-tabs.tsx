@@ -47,13 +47,13 @@ interface ExpandableTabsProps {
 const buttonVariants = {
   initial: {
     gap: 0,
-    paddingLeft: ".5rem",
-    paddingRight: ".5rem",
+    paddingLeft: ".75rem",
+    paddingRight: ".75rem",
   },
   animate: (isSelected: boolean) => ({
     gap: isSelected ? ".5rem" : 0,
-    paddingLeft: isSelected ? "1rem" : ".5rem",
-    paddingRight: isSelected ? "1rem" : ".5rem",
+    paddingLeft: isSelected ? "1.125rem" : ".75rem",
+    paddingRight: isSelected ? "1.125rem" : ".75rem",
   }),
 };
 
@@ -126,16 +126,17 @@ export function ExpandableTabs({
             aria-pressed={selected === index}
             aria-label={tab.title}
             className={cn(
-              "relative flex items-center rounded-xl px-4 py-2 text-sm font-medium transition-colors duration-300",
+              // py-2.5 + 22px icon ≈ a 44px touch target inside the pill
+              "relative flex items-center rounded-full px-4 py-2.5 text-[15px] font-semibold transition-colors duration-300",
               selected === index
                 ? cn("bg-secondary", activeColor)
                 : "text-muted-foreground hover:bg-secondary hover:text-foreground"
             )}
           >
             <span className="relative">
-              <Icon size={20} />
+              <Icon size={22} strokeWidth={2.1} />
               {tab.badge ? (
-                <span className="absolute -right-2 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold leading-none text-white">
+                <span className="absolute -right-2.5 -top-2 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[10px] font-bold leading-none text-white ring-2 ring-white">
                   {tab.badge > 9 ? "9+" : tab.badge}
                 </span>
               ) : null}

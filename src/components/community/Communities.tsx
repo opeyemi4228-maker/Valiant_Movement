@@ -13,10 +13,15 @@ import {
   Vote,
   X,
   Loader2,
+  Phone,
+  Video,
 } from "lucide-react";
 import { getMyCommunities, getCommunityMembers, type MyCommunitiesResult } from "@/app/actions/communities";
 import type { CommunityDTO, CommunityMemberDTO, CommunityScope } from "@/lib/communities";
+import type { StartCallDetail } from "@/components/call/CallCenter";
 import { Avatar } from "./Avatar";
+import { CommunityChat } from "./CommunityChat";
+import { colorFor } from "./chat-shared";
 
 function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
@@ -35,6 +40,7 @@ const SCOPE_META: Record<CommunityScope, { icon: typeof Users; label: string; co
 export function Communities() {
   const [res, setRes] = useState<MyCommunitiesResult | null>(null);
   const [open, setOpen] = useState<CommunityDTO | null>(null);
+  const [chat, setChat] = useState<CommunityDTO | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -70,6 +76,20 @@ export function Communities() {
   const groups = res.items.filter((c) => c.scope !== "state");
   const p = res.placement;
 
+  /* ------------------- group chat (WhatsApp-style) ------------------- */
+  if (chat) {
+    return (
+      <>
+        {open && <MembersSheet community={open} onClose={() => setOpen(null)} />}
+        <CommunityChat
+          community={chat}
+          onBack={() => setChat(null)}
+          onShowMembers={() => setOpen(chat)}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto">
       {open && <MembersSheet community={open} onClose={() => setOpen(null)} />}
@@ -95,9 +115,11 @@ export function Communities() {
         </div>
 
         {/* State community — the parent (announcement channel) */}
-        {parent && <ParentCard c={parent} onOpen={() => setOpen(parent)} />}
+        {parent && (
+          <ParentCard c={parent} onOpen={() => setChat(parent)} onMembers={() => setOpen(parent)} />
+        )}
 
-        {/* Groups inside the community */}
+        {/* Groups inside the community — tap one to open its group chat */}
         {groups.length > 0 && (
           <>
             <h2 className="mb-2 mt-5 text-xs font-bold uppercase tracking-wider text-[var(--color-faint)]">
@@ -105,7 +127,7 @@ export function Communities() {
             </h2>
             <div className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white">
               {groups.map((c, i) => (
-                <GroupRow key={c.id} c={c} first={i === 0} onOpen={() => setOpen(c)} />
+                <GroupRow key={c.id} c={c} first={i === 0} onOpen={() => setChat(c)} />
               ))}
             </div>
           </>
@@ -122,7 +144,15 @@ export function Communities() {
 
 /* ----------------------------- parent card ----------------------------- */
 
-function ParentCard({ c, onOpen }: { c: CommunityDTO; onOpen: () => void }) {
+function ParentCard({
+  c,
+  onOpen,
+  onMembers,
+}: {
+  c: CommunityDTO;
+  onOpen: () => void;
+  onMembers: () => void;
+}) {
   const meta = SCOPE_META[c.scope];
   const Icon = meta.icon;
   return (
@@ -148,12 +178,20 @@ function ParentCard({ c, onOpen }: { c: CommunityDTO; onOpen: () => void }) {
           </div>
         </div>
         {c.description && <p className="mt-3 text-sm leading-relaxed text-white/85">{c.description}</p>}
-        <button
-          onClick={onOpen}
-          className="mt-4 flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-[var(--color-brand-strong)] shadow-sm transition hover:bg-white/90"
-        >
-          <Users className="h-4 w-4" /> View members
-        </button>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <button
+            onClick={onOpen}
+            className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-[var(--color-brand-strong)] shadow-sm transition hover:bg-white/90"
+          >
+            <Megaphone className="h-4 w-4" /> Open group chat
+          </button>
+          <button
+            onClick={onMembers}
+            className="flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-sm font-bold text-white ring-1 ring-white/30 transition hover:bg-white/25"
+          >
+            <Users className="h-4 w-4" /> View members
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -211,6 +249,15 @@ function MembersSheet({ community, onClose }: { community: CommunityDTO; onClose
 
   const meta = SCOPE_META[community.scope];
 
+  // Ring a fellow member 1:1 through the global call center (same rules as
+  // Messages — calling yourself or someone you haven't chatted with yet is
+  // rejected there with a friendly toast).
+  function callMember(m: CommunityMemberDTO, mode: "voice" | "video") {
+    const detail: StartCallDetail = { calleeId: m.id, name: m.name, color: colorFor(m.id), mode };
+    window.dispatchEvent(new CustomEvent("valiant-call:start", { detail }));
+    onClose();
+  }
+
   return (
     <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
@@ -246,8 +293,8 @@ function MembersSheet({ community, onClose }: { community: CommunityDTO; onClose
             <p className="py-10 text-center text-sm text-[var(--color-muted)]">No members yet.</p>
           ) : (
             members.map((m) => (
-              <div key={m.id} className="flex items-center gap-3 rounded-xl p-2.5">
-                <Avatar name={m.name} color="#e07400" size={38} />
+              <div key={m.id} className="flex items-center gap-3 rounded-xl p-2.5 transition hover:bg-[var(--color-surface-2)]">
+                <Avatar name={m.name} color={colorFor(m.id)} photo={m.avatar ?? undefined} size={38} />
                 <div className="min-w-0 flex-1 leading-tight">
                   <div className="truncate text-sm font-semibold text-[var(--color-ink)]">{m.name}</div>
                   <div className="text-xs text-[var(--color-faint)]">
@@ -259,6 +306,24 @@ function MembersSheet({ community, onClose }: { community: CommunityDTO; onClose
                     {m.role}
                   </span>
                 )}
+                <div className="flex shrink-0 items-center gap-0.5 text-[var(--color-muted)]">
+                  <button
+                    onClick={() => callMember(m, "video")}
+                    title={`Video call ${m.name}`}
+                    aria-label={`Video call ${m.name}`}
+                    className="grid size-9 place-items-center rounded-full transition hover:bg-[var(--color-brand-tint)] hover:text-[var(--color-brand-strong)]"
+                  >
+                    <Video className="h-[18px] w-[18px]" />
+                  </button>
+                  <button
+                    onClick={() => callMember(m, "voice")}
+                    title={`Voice call ${m.name}`}
+                    aria-label={`Voice call ${m.name}`}
+                    className="grid size-9 place-items-center rounded-full transition hover:bg-[var(--color-brand-tint)] hover:text-[var(--color-brand-strong)]"
+                  >
+                    <Phone className="h-[18px] w-[18px]" />
+                  </button>
+                </div>
               </div>
             ))
           )}

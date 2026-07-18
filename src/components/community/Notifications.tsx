@@ -14,6 +14,10 @@ import {
   BadgeCheck,
   CheckCheck,
   Settings,
+  MessageSquareText,
+  Newspaper,
+  Wallet,
+  CalendarClock,
 } from "lucide-react";
 import { getNotifications, markNotificationsRead } from "@/app/actions/notifications";
 import type { NotificationDTO, NotifType } from "@/lib/notif-types";
@@ -27,6 +31,10 @@ const META: Record<NotifType, { icon: typeof Heart; color: string }> = {
   call: { icon: Phone, color: "var(--color-green)" },
   verified: { icon: BadgeCheck, color: "var(--color-brand)" },
   system: { icon: Users, color: "var(--color-brand)" },
+  message: { icon: MessageSquareText, color: "var(--color-navy)" },
+  post: { icon: Newspaper, color: "var(--color-brand-strong)" },
+  finance: { icon: Wallet, color: "var(--color-green)" },
+  dues: { icon: CalendarClock, color: "var(--color-amber)" },
 };
 
 function timeAgo(iso: string) {

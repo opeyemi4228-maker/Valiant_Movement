@@ -12,7 +12,6 @@ import {
   User,
   LogOut,
   Feather,
-  Menu,
 } from "lucide-react";
 import { logout } from "@/app/actions/auth";
 import { ExpandableTabs } from "@/components/ui/expandable-tabs";
@@ -62,10 +61,9 @@ const MOBILE_TABS = MOBILE_NAV.map((n) => ({
 export function MemberShell({
   user,
 }: {
-  user: { fullName: string | null; email: string; status: string };
+  user: { fullName: string | null; email: string; status: string; avatarUrl?: string | null };
 }) {
   const [tab, setTab] = useState<Tab>("home");
-  const [mobileNav, setMobileNav] = useState(false);
   const [notifUnread, setNotifUnread] = useState(0);
   const name = user.fullName ?? "Member";
 
@@ -83,11 +81,10 @@ export function MemberShell({
   }, []);
   const handle = "@" + name.toLowerCase().replace(/\s+/g, "_");
 
-  const me = { name, handle, color: "#e07400", email: user.email };
+  const me = { name, handle, color: "#e07400", email: user.email, avatar: user.avatarUrl ?? undefined };
 
   function go(t: Tab) {
     setTab(t);
-    setMobileNav(false);
   }
 
   // Keep the active tab highlighted/expanded in the bottom pill. Tabs reached
@@ -106,54 +103,38 @@ export function MemberShell({
         <SidebarInner tab={tab} go={go} me={me} notifCount={notifUnread} />
       </aside>
 
-      {/* ============================ Sidebar (mobile drawer) ============================ */}
-      {mobileNav && (
-        <div className="fixed inset-0 z-50 lg:hidden">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setMobileNav(false)} />
-          <aside className="absolute left-0 top-0 flex h-full w-[280px] flex-col border-r border-[var(--color-line)] bg-white px-4 py-4">
-            <SidebarInner tab={tab} go={go} me={me} notifCount={notifUnread} expanded />
-          </aside>
-        </div>
-      )}
-
       {/* ================================ Main ================================ */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Mobile top bar */}
-        <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between border-b border-[var(--color-line)] bg-white/85 px-3 backdrop-blur lg:hidden">
-          <button
-            onClick={() => setMobileNav(true)}
-            className="grid size-10 shrink-0 place-items-center rounded-xl border border-[var(--color-line)] text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)] active:scale-95"
-            aria-label="Open navigation"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-
+        {/* Mobile top bar — brand on the left, profile on the right. All
+            navigation lives in the bottom tab pill; no drawer needed. */}
+        <header className="sticky top-0 z-30 flex h-[72px] shrink-0 items-center justify-between gap-3 border-b border-[var(--color-line)] bg-white/85 px-4 backdrop-blur lg:hidden">
           {/* Brand lockup */}
           <button
             onClick={() => go("home")}
-            className="flex min-w-0 items-center gap-2.5 px-1"
+            className="flex min-w-0 items-center gap-3 active:scale-[0.98]"
             aria-label="The Valiant Movement — Home"
           >
-            <span className="inline-flex shrink-0 items-center justify-center rounded-lg bg-white p-1 shadow-sm ring-1 ring-black/5">
-              <img src="/valiant-logo.png" alt="" className="h-6 w-auto" />
+            <span className="inline-flex shrink-0 items-center justify-center rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-black/5">
+              <img src="/valiant-logo.png" alt="" className="h-8 w-auto" />
             </span>
             <span className="min-w-0 text-left leading-none">
-              <span className="block truncate text-[15px] font-extrabold tracking-tight text-[var(--color-navy)]">
+              <span className="block truncate text-[17px] font-extrabold tracking-tight text-[var(--color-navy)]">
                 The Valiant{" "}
                 <span className="text-[var(--color-brand-strong)]">Movement</span>
               </span>
-              <span className="mt-1 block text-[9px] font-bold uppercase tracking-[0.22em] text-[var(--color-faint)]">
+              <span className="mt-1 block text-[10px] font-bold uppercase tracking-[0.22em] text-[var(--color-faint)]">
                 Courage to Lead
               </span>
             </span>
           </button>
 
+          {/* 44px avatar = the minimum comfortable thumb target */}
           <button
             onClick={() => go("profile")}
             className="shrink-0 rounded-full ring-2 ring-[var(--color-brand-tint)] transition active:scale-95"
             aria-label="Profile"
           >
-            <Avatar name={name} color="#e07400" size={36} />
+            <Avatar name={name} color="#e07400" photo={me.avatar} size={44} />
           </button>
         </header>
 
@@ -171,7 +152,7 @@ export function MemberShell({
         {/* Mobile bottom tab bar — expandable pill that reveals the active
             label. Sits in flow so content above it is never covered, with
             safe-area padding for iOS home-indicator devices. */}
-        <div className="shrink-0 border-t border-[var(--color-line)] bg-white px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:hidden">
+        <div className="shrink-0 border-t border-[var(--color-line)] bg-white px-3 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] lg:hidden">
           <ExpandableTabs
             tabs={MOBILE_TABS.map((t, i) =>
               MOBILE_NAV[i].id === "notifications" ? { ...t, badge: notifUnread || undefined } : t,
@@ -179,7 +160,7 @@ export function MemberShell({
             selected={activeMobileIndex >= 0 ? activeMobileIndex : null}
             onChange={onMobileNav}
             activeColor="text-[var(--color-brand-strong)]"
-            className="mx-auto w-fit max-w-full flex-nowrap justify-center rounded-full border-[var(--color-line)] bg-[var(--color-surface-2)]"
+            className="mx-auto w-fit max-w-full flex-nowrap justify-center gap-1 rounded-full border-[var(--color-line)] bg-[var(--color-surface-2)] p-1.5"
           />
         </div>
       </div>
@@ -187,9 +168,10 @@ export function MemberShell({
       {/* Real-time: incoming-call ringing + new-message notifications */}
       <RealtimePresence />
 
-      {/* Valiant AI — voice + text assistant, available app-wide. Raised on the
-          chat tab so the orb clears the message composer (voice note + send). */}
-      <ValiantAILauncher raised={tab === "messages"} />
+      {/* Valiant AI — voice + text assistant, available app-wide. Raised on
+          the chat tabs (Messages + community group chat) so the orb clears
+          the message composer (voice note + send). */}
+      <ValiantAILauncher raised={tab === "messages" || tab === "communities"} />
 
       {/* App-wide calling: rings, waits for pickup, and dings on new messages. */}
       <CallCenter />
@@ -208,7 +190,7 @@ function SidebarInner({
 }: {
   tab: Tab;
   go: (t: Tab) => void;
-  me: { name: string; handle: string; email: string };
+  me: { name: string; handle: string; email: string; avatar?: string };
   notifCount?: number;
   expanded?: boolean;
 }) {
@@ -276,7 +258,7 @@ function SidebarInner({
       {/* User chip + sign out */}
       <div className="mt-3 border-t border-[var(--color-line)] pt-3">
         <div className={`flex items-center gap-3 rounded-xl px-2 py-2 ${expanded ? "" : "justify-center xl:justify-start"}`}>
-          <Avatar name={me.name} color="#e07400" size={38} />
+          <Avatar name={me.name} color="#e07400" photo={me.avatar} size={38} />
           <div className={`min-w-0 flex-1 leading-tight ${labelCls}`}>
             <div className="truncate text-sm font-semibold text-[var(--color-ink)]">{me.name}</div>
             <div className="truncate text-xs text-[var(--color-faint)]">{me.handle}</div>

@@ -20,6 +20,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -273,6 +274,10 @@ export const communities = pgTable(
     scopeRefId: uuid("scope_ref_id"),
     visibility: communityVisibility("visibility").notNull().default("public"),
     memberCount: integer("member_count").notNull().default(0),
+    // the community's group chat (created lazily on first open)
+    conversationId: uuid("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
     createdBy: uuid("created_by").references(() => users.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -468,6 +473,129 @@ export const notifications = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("notifications_user_idx").on(t.userId, t.createdAt)],
+);
+
+/* ---- stories: 24-hour member status posts on the feed rail ---- */
+
+export const stories = pgTable(
+  "stories",
+  {
+    id: pk(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    media: text("media").notNull(), // image data URL (client-downscaled)
+    caption: text("caption"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("stories_user_idx").on(t.userId, t.createdAt.desc()),
+    // expiry filter + sweeper: stories live for 24 hours
+    index("stories_created_idx").on(t.createdAt),
+  ],
+);
+
+/* ---- huddles: community group calls (mesh of pairwise WebRTC links) ---- */
+
+export const huddles = pgTable(
+  "huddles",
+  {
+    id: pk(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    mode: text("mode").notNull().default("voice"), // voice | video
+    startedBy: uuid("started_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+  },
+  (t) => [index("huddles_conversation_idx").on(t.conversationId, t.startedAt.desc())],
+);
+
+export const huddlePeers = pgTable(
+  "huddle_peers",
+  {
+    huddleId: uuid("huddle_id")
+      .notNull()
+      .references(() => huddles.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    leftAt: timestamp("left_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.huddleId, t.userId] })],
+);
+
+/** One WebRTC signaling channel per participant pair; a_id < b_id and A is
+ *  always the offer side, so both peers derive their role deterministically. */
+export const huddleSignals = pgTable(
+  "huddle_signals",
+  {
+    huddleId: uuid("huddle_id")
+      .notNull()
+      .references(() => huddles.id, { onDelete: "cascade" }),
+    aId: uuid("a_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    bId: uuid("b_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    offer: text("offer"),
+    answer: text("answer"),
+    iceA: jsonb("ice_a").notNull().default(sql`'[]'::jsonb`),
+    iceB: jsonb("ice_b").notNull().default(sql`'[]'::jsonb`),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    primaryKey({ columns: [t.huddleId, t.aId, t.bId] }),
+    check("huddle_pair_ordered", sql`a_id < b_id`),
+  ],
+);
+
+/* ---- member reports: members flag other members for moderation ---- */
+
+export const reportStatus = pgEnum("report_status", [
+  "open",
+  "reviewing",
+  "resolved",
+  "dismissed",
+]);
+
+export const memberReports = pgTable(
+  "member_reports",
+  {
+    id: pk(),
+    reporterId: uuid("reporter_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    reportedId: uuid("reported_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    category: text("category").notNull(), // harassment|spam|impersonation|hate|violence|other
+    details: text("details"),
+    status: reportStatus("status").notNull().default("open"),
+    resolvedBy: text("resolved_by"), // admin role key that closed it
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // moderation queue: open reports, newest first
+    index("member_reports_status_idx").on(t.status, t.createdAt.desc()),
+    // "all reports against this member"
+    index("member_reports_reported_idx").on(t.reportedId, t.createdAt.desc()),
+    // one OPEN report per reporter→member pair; re-reportable once resolved
+    uniqueIndex("member_reports_open_pair_idx")
+      .on(t.reporterId, t.reportedId)
+      .where(sql`status = 'open'`),
+    check("member_reports_no_self", sql`reporter_id <> reported_id`),
+  ],
 );
 
 /* ----------------------------- relations ----------------------------- */

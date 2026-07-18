@@ -8,7 +8,12 @@ export default async function DashboardPage() {
 
   return (
     <MemberShell
-      user={{ fullName: user.fullName, email: user.email, status: user.status }}
+      user={{
+        fullName: user.fullName,
+        email: user.email,
+        status: user.status,
+        avatarUrl: user.avatarUrl,
+      }}
     />
   );
 }

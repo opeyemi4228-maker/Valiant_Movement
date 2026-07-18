@@ -296,6 +296,8 @@ export async function rtcGet(id: string): Promise<{
 /* ----------------------------- presence ----------------------------- */
 
 export async function unreadFor(meId: string): Promise<number> {
+  // Drives the Messages badge + "new message" ding — DIRECT chats only, so
+  // community group chatter doesn't ping like a personal message.
   const [row] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(messages)
@@ -303,9 +305,13 @@ export async function unreadFor(meId: string): Promise<number> {
       conversationMembers,
       and(eq(conversationMembers.conversationId, messages.conversationId), eq(conversationMembers.userId, meId)),
     )
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
     .where(
       and(
+        eq(conversations.type, "direct"),
         ne(messages.senderId, meId),
+        // system events ("X joined") never count as unread
+        sql`(${messages.media}->>'kind') IS DISTINCT FROM 'system'`,
         or(isNull(conversationMembers.lastReadAt), gt(messages.createdAt, conversationMembers.lastReadAt)),
       ),
     );

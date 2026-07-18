@@ -10,7 +10,6 @@ import {
   pollPresence,
 } from "@/app/actions/realtime";
 import type { CallSignal, CallMode } from "@/lib/call-types";
-import { playDing } from "@/lib/sound";
 import { IncomingCall } from "./IncomingCall";
 import { OutgoingCall } from "./OutgoingCall";
 import { CallRoom, type CallConfig } from "./CallRoom";
@@ -40,7 +39,7 @@ export function CallCenter() {
   const [incoming, setIncoming] = useState<CallSignal | null>(null);
   const [outgoing, setOutgoing] = useState<Outgoing | null>(null);
   const [outStatus, setOutStatus] = useState<string | undefined>(undefined);
-  const [inCall, setInCall] = useState<{ callId: string; config: CallConfig } | null>(null);
+  const [inCall, setInCall] = useState<{ callId: string; config: CallConfig; remoteEnded?: boolean } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   // Latest state for the presence loop without re-arming its interval.
@@ -58,16 +57,18 @@ export function CallCenter() {
     setTimeout(() => setToast(null), 2600);
   }, []);
 
-  /* -------- presence: incoming calls + new-message ding -------- */
+  /* -------- presence: incoming calls (message dings live in
+              RealtimePresence — one owner per signal) -------- */
   useEffect(() => {
     let alive = true;
-    let prevUnread = -1; // -1 → skip the ding on the very first sample
     const tick = async () => {
-      const { incomingCall, unread } = await pollPresence();
+      let incomingCall: CallSignal | null;
+      try {
+        ({ incomingCall } = await pollPresence());
+      } catch {
+        return; // transient — the next tick recovers
+      }
       if (!alive) return;
-
-      if (prevUnread >= 0 && unread > prevUnread) playDing();
-      prevUnread = unread;
 
       // Don't interrupt an active/ringing call with a new incoming banner,
       // and never re-show a call the user already accepted or declined.
@@ -116,7 +117,12 @@ export function CallCenter() {
     if (!outgoing) return;
     let alive = true;
     const t = setInterval(async () => {
-      const sig = await getCallStatus(outgoing.callId);
+      let sig: CallSignal | null;
+      try {
+        sig = await getCallStatus(outgoing.callId);
+      } catch {
+        return; // transient — keep ringing, next poll recovers
+      }
       if (!alive || !sig) return;
       if (sig.status === "accepted") {
         clearInterval(t);
@@ -157,14 +163,19 @@ export function CallCenter() {
       if (!alive) return;
       if (sig && (sig.status === "ended" || sig.status === "declined" || sig.status === "missed")) {
         clearInterval(t);
-        setInCall(null); // the other party hung up — close automatically
+        // The other party hung up — the room winds itself down and shows the
+        // "X ended the call" summary instead of vanishing abruptly.
+        setInCall((c) => (c ? { ...c, remoteEnded: true } : null));
         return;
       }
       // A missing signal is usually transient (serverless lag / brief store
       // miss). Only give up after several consecutive misses (~9s) so a live
       // call is never cut short by a single failed poll.
       if (!sig) {
-        if (++misses >= 6) { clearInterval(t); setInCall(null); }
+        if (++misses >= 6) {
+          clearInterval(t);
+          setInCall((c) => (c ? { ...c, remoteEnded: true } : null));
+        }
       } else {
         misses = 0;
       }
@@ -238,7 +249,7 @@ export function CallCenter() {
           onCancel={cancelOutgoing}
         />
       )}
-      {inCall && <CallRoom config={inCall.config} onClose={endInCall} />}
+      {inCall && <CallRoom config={inCall.config} onClose={endInCall} remoteEnded={inCall.remoteEnded} />}
     </>
   );
 }

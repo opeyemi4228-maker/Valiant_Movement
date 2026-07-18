@@ -29,6 +29,27 @@
       "when": 1783837663948,
       "tag": "0003_thankful_silver_surfer",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784159501465,
+      "tag": "0004_natural_la_nuit",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784182647589,
+      "tag": "0005_dark_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784359123980,
+      "tag": "0006_sturdy_garia",
+      "breakpoints": true
     }
   ]
 }

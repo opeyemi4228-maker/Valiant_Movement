@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -)",
+      "Bash(git commit -q -m ' *)",
+      "Bash(grep -n 'id: `\\\\|id:' src/lib/demo-store.ts)",
+      "Bash(grep -vE \"^\\\\s*$\")"
+    ]
+  }
+}
