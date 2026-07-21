@@ -24,5 +24,6 @@ export interface FeedPost {
   liked: boolean;
   reposts: number;
   reposted: boolean;
+  bookmarked: boolean;
   comments: FeedComment[];
 }

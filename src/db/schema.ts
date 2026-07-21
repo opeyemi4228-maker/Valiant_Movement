@@ -598,6 +598,71 @@ export const memberReports = pgTable(
   ],
 );
 
+/* ============================================================
+   Wallet & payments — a real, provider-agnostic ledger.
+
+   `wallets.balance` is a materialized running total (same pattern as
+   `communities.member_count` / `posts.like_count`): O(1) balance reads
+   instead of summing the ledger on every dashboard load. It is only ever
+   changed inside the same DB statement/transaction as the `payments` row
+   that justifies the change, so the two never drift.
+
+   `payments` is the append-only audit trail for every naira that moves:
+   deposits (member → wallet, via a payment gateway), withdrawals (wallet →
+   member's bank account, via the gateway's payout/disbursement API), and
+   dues (wallet → the movement, monthly). `reference` is OUR idempotency
+   key (safe to retry); `providerReference` is the gateway's transaction id,
+   used to match incoming webhooks back to a row exactly once.
+   ============================================================ */
+
+export const paymentKind = pgEnum("payment_kind", ["deposit", "withdrawal", "dues", "adjustment"]);
+export const paymentStatus = pgEnum("payment_status", ["pending", "completed", "failed", "reversed"]);
+export const paymentProvider = pgEnum("payment_provider", ["monnify", "manual"]);
+
+export const wallets = pgTable("wallets", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  balance: integer("balance").notNull().default(0), // whole naira; never negative
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+});
+
+export const payments = pgTable(
+  "payments",
+  {
+    id: pk(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: paymentKind("kind").notNull(),
+    status: paymentStatus("status").notNull().default("pending"),
+    provider: paymentProvider("provider").notNull().default("monnify"),
+    amount: integer("amount").notNull(), // whole naira, always positive
+    // our idempotency key, e.g. "dep_..." / "wd_..." — passed to the gateway
+    // as its payment/transfer reference so webhooks can be matched back.
+    reference: text("reference").notNull().unique(),
+    providerReference: text("provider_reference").unique(),
+    // withdrawal destination (resolved via the gateway's account-validate
+    // call before a transfer is ever attempted)
+    destinationBankCode: text("destination_bank_code"),
+    destinationAccountNumber: text("destination_account_number"),
+    destinationAccountName: text("destination_account_name"),
+    description: text("description"),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    // "my transaction history", newest first
+    index("payments_user_idx").on(t.userId, t.createdAt.desc()),
+    // webhook reconciliation / stuck-pending sweeps
+    index("payments_status_idx").on(t.status, t.createdAt),
+  ],
+);
+
 /* ----------------------------- relations ----------------------------- */
 
 export const usersRelations = relations(users, ({ one, many }) => ({

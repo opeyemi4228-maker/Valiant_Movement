@@ -6,10 +6,14 @@ import { pollPresence } from "@/app/actions/realtime";
 import { getNotifications } from "@/app/actions/notifications";
 import { playDing } from "@/lib/sound";
 
-/** Mounted once in the member shell. Owns the NOTIFICATION surfaces: the
- *  new-message ding + toast and the notification-center bell badge/toast.
- *  Calls (ring, accept, decline, in-call) are owned solely by CallCenter —
- *  a second answer path here once opened rooms with no WebRTC wiring. */
+/** Mounted once in the member shell. Owns the ONE presence poll for the
+ *  whole app — the new-message ding + toast, the notification-center bell
+ *  badge/toast, AND the incoming-call signal (broadcast via the
+ *  "valiant:incoming-call" window event for CallCenter to react to). This
+ *  used to be two independent 2s pollers hitting the same presence query;
+ *  consolidating halves that traffic. Calls (ring, accept, decline, in-call)
+ *  are still driven solely by CallCenter — a second answer path here once
+ *  opened rooms with no WebRTC wiring. */
 export function RealtimePresence() {
   const [toast, setToast] = useState<string | null>(null);
   const [notifToast, setNotifToast] = useState<string | null>(null);
@@ -20,47 +24,50 @@ export function RealtimePresence() {
 
   useEffect(() => {
     let alive = true;
+    let inFlight = false; // skip a tick rather than let slow polls pile up
     const tick = async () => {
-      let unread: number;
+      if (inFlight) return;
+      inFlight = true;
       try {
-        ({ unread } = await pollPresence());
-      } catch {
-        return; // transient — the next tick recovers
-      }
-      if (!alive) return;
+        // Independent reads — run together instead of one after the other,
+        // and let either fail without losing the other's result.
+        const [presenceRes, notifRes] = await Promise.allSettled([pollPresence(), getNotifications()]);
+        if (!alive) return;
 
-      // new-message notification
-      if (prevUnread.current >= 0 && unread > prevUnread.current) {
-        playDing();
-        setToast("New message");
-        setTimeout(() => setToast((t) => (t === "New message" ? null : t)), 3500);
-      }
-      prevUnread.current = unread;
+        if (presenceRes.status === "fulfilled") {
+          const { unread, incomingCall } = presenceRes.value;
+          if (prevUnread.current >= 0 && unread > prevUnread.current) {
+            playDing();
+            setToast("New message");
+            setTimeout(() => setToast((t) => (t === "New message" ? null : t)), 3500);
+          }
+          prevUnread.current = unread;
+          // CallCenter listens for this instead of running its own poll —
+          // one presence query serves both surfaces.
+          window.dispatchEvent(new CustomEvent("valiant:incoming-call", { detail: incomingCall }));
+        }
 
-      // notification center — alert on a genuinely new item, broadcast the
-      // unread count so the nav bell badge stays live.
-      let notif;
-      try {
-        notif = await getNotifications();
-      } catch {
-        return; // transient — the next tick recovers
+        if (notifRes.status === "fulfilled") {
+          const notif = notifRes.value;
+          const top = notif.items[0] ?? null;
+          if (
+            prevNotifCount.current >= 0 &&
+            top &&
+            top.id !== prevNotifTop.current &&
+            notif.unread > prevNotifCount.current
+          ) {
+            playDing();
+            const body = top.body;
+            setNotifToast(body);
+            setTimeout(() => setNotifToast((t) => (t === body ? null : t)), 4500);
+          }
+          prevNotifCount.current = notif.unread;
+          prevNotifTop.current = top?.id ?? null;
+          window.dispatchEvent(new CustomEvent("valiant:notif-unread", { detail: notif.unread }));
+        }
+      } finally {
+        inFlight = false;
       }
-      if (!alive) return;
-      const top = notif.items[0] ?? null;
-      if (
-        prevNotifCount.current >= 0 &&
-        top &&
-        top.id !== prevNotifTop.current &&
-        notif.unread > prevNotifCount.current
-      ) {
-        playDing();
-        const body = top.body;
-        setNotifToast(body);
-        setTimeout(() => setNotifToast((t) => (t === body ? null : t)), 4500);
-      }
-      prevNotifCount.current = notif.unread;
-      prevNotifTop.current = top?.id ?? null;
-      window.dispatchEvent(new CustomEvent("valiant:notif-unread", { detail: notif.unread }));
     };
     tick();
     const t = setInterval(tick, 2000);

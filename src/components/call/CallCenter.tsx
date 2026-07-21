@@ -7,7 +7,6 @@ import {
   answerCall,
   declineCall,
   hangupCall,
-  pollPresence,
 } from "@/app/actions/realtime";
 import type { CallSignal, CallMode } from "@/lib/call-types";
 import { IncomingCall } from "./IncomingCall";
@@ -57,19 +56,13 @@ export function CallCenter() {
     setTimeout(() => setToast(null), 2600);
   }, []);
 
-  /* -------- presence: incoming calls (message dings live in
-              RealtimePresence — one owner per signal) -------- */
+  /* -------- presence: incoming calls --------
+     RealtimePresence owns the actual poll (one presence query serves both
+     surfaces instead of two independent 2s pollers) and broadcasts each
+     result here as a window event. */
   useEffect(() => {
-    let alive = true;
-    const tick = async () => {
-      let incomingCall: CallSignal | null;
-      try {
-        ({ incomingCall } = await pollPresence());
-      } catch {
-        return; // transient — the next tick recovers
-      }
-      if (!alive) return;
-
+    const onPresence = (e: Event) => {
+      const incomingCall = (e as CustomEvent<CallSignal | null>).detail;
       // Don't interrupt an active/ringing call with a new incoming banner,
       // and never re-show a call the user already accepted or declined.
       if (!busyRef.current || incomingIdRef.current) {
@@ -82,9 +75,8 @@ export function CallCenter() {
         }
       }
     };
-    tick();
-    const t = setInterval(tick, 2000);
-    return () => { alive = false; clearInterval(t); };
+    window.addEventListener("valiant:incoming-call", onPresence);
+    return () => window.removeEventListener("valiant:incoming-call", onPresence);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -116,12 +108,17 @@ export function CallCenter() {
   useEffect(() => {
     if (!outgoing) return;
     let alive = true;
+    let inFlight = false;
     const t = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       let sig: CallSignal | null;
       try {
         sig = await getCallStatus(outgoing.callId);
       } catch {
         return; // transient — keep ringing, next poll recovers
+      } finally {
+        inFlight = false;
       }
       if (!alive || !sig) return;
       if (sig.status === "accepted") {
@@ -153,12 +150,17 @@ export function CallCenter() {
     if (!inCall) return;
     let alive = true;
     let misses = 0;
+    let inFlight = false;
     const t = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       let sig: CallSignal | null;
       try {
         sig = await getCallStatus(inCall.callId);
       } catch {
         return; // network blip — keep the call up
+      } finally {
+        inFlight = false;
       }
       if (!alive) return;
       if (sig && (sig.status === "ended" || sig.status === "declined" || sig.status === "missed")) {

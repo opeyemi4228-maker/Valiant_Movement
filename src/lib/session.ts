@@ -12,6 +12,39 @@ import { withRetry } from "./retry";
 const COOKIE = "vm_session";
 const MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
+/**
+ * Short-lived in-process cache for the session→user lookup, keyed by token
+ * hash. Every dashboard tab mount fires several server actions in the same
+ * instant (feed + stories + presence + notifications + …), and each one used
+ * to independently re-run the sessions⋈users⋈profiles join. On a warm
+ * instance this collapses that burst — and every poll tick after it — down
+ * to one DB round trip every few seconds instead of one per action per tick.
+ * TTL is short enough that a status change (suspend/ban) or a profile edit
+ * still lands within a couple of seconds; `destroySession` also evicts
+ * immediately so logout never reads stale.
+ */
+const SESSION_CACHE_TTL_MS = 3000;
+const sessionCache = new Map<string, { user: CurrentUser | null; expiresAt: number }>();
+
+function cacheGetUser(tokenHash: string): CurrentUser | null | undefined {
+  const hit = sessionCache.get(tokenHash);
+  if (!hit) return undefined;
+  if (hit.expiresAt < Date.now()) {
+    sessionCache.delete(tokenHash);
+    return undefined;
+  }
+  return hit.user;
+}
+
+function cacheSetUser(tokenHash: string, user: CurrentUser | null): void {
+  if (sessionCache.size > 500) {
+    // opportunistic sweep so a long-lived instance can't grow this unbounded
+    const now = Date.now();
+    for (const [k, v] of sessionCache) if (v.expiresAt < now) sessionCache.delete(k);
+  }
+  sessionCache.set(tokenHash, { user, expiresAt: Date.now() + SESSION_CACHE_TTL_MS });
+}
+
 export async function createSession(
   userId: string,
   meta?: { userAgent?: string; ip?: string },
@@ -40,7 +73,9 @@ export async function destroySession(): Promise<void> {
   const cookieStore = await cookies();
   const token = cookieStore.get(COOKIE)?.value;
   if (token) {
-    await db.delete(sessions).where(eq(sessions.tokenHash, hashToken(token)));
+    const tokenHash = hashToken(token);
+    await db.delete(sessions).where(eq(sessions.tokenHash, tokenHash));
+    sessionCache.delete(tokenHash);
     cookieStore.delete(COOKIE);
   }
 }
@@ -89,6 +124,10 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   const token = cookieStore.get(COOKIE)?.value;
   if (!token) return null;
 
+  const tokenHash = hashToken(token);
+  const cached = cacheGetUser(tokenHash);
+  if (cached !== undefined) return cached;
+
   // Retry the lookup so a Neon cold-start blip doesn't crash the page.
   // 5 attempts (~4.5s of backoff) outlasts all but the coldest starts.
   const rows = await withRetry(
@@ -107,7 +146,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       .leftJoin(profiles, eq(profiles.userId, users.id))
       .where(
         and(
-          eq(sessions.tokenHash, hashToken(token)),
+          eq(sessions.tokenHash, tokenHash),
           gt(sessions.expiresAt, new Date()),
         ),
       )
@@ -115,7 +154,9 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     5,
   );
 
-  return rows[0] ?? null;
+  const user = rows[0] ?? null;
+  cacheSetUser(tokenHash, user);
+  return user;
 }
 
 /**

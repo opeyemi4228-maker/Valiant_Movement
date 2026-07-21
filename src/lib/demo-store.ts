@@ -132,6 +132,7 @@ interface Store {
     at: number;
     likedBy: Set<string>;
     repostedBy: Set<string>;
+    bookmarkedBy: Set<string>;
     comments: Array<{ id: string; authorId: string; text: string; at: number }>;
   }>;
   calls: StoredCall[];
@@ -191,6 +192,7 @@ function seed(): Store {
       at: now - 3600_000,
       likedBy: new Set(),
       repostedBy: new Set(),
+      bookmarkedBy: new Set(),
       comments: [],
     },
     {
@@ -200,6 +202,7 @@ function seed(): Store {
       at: now - 7200_000,
       likedBy: new Set([amara.id]),
       repostedBy: new Set(),
+      bookmarkedBy: new Set(),
       comments: [{ id: "cm_1", authorId: amara.id, text: "Count me in! 🙌", at: now - 7000_000 }],
     },
   ];
@@ -215,6 +218,7 @@ function store(): Store {
   s.alerts ??= [];
   s.rtc ??= new Map();
   s.notifs ??= [];
+  for (const p of s.posts) p.bookmarkedBy ??= new Set();
   return s;
 }
 
@@ -514,6 +518,7 @@ function toPostDTO(meId: string, p: Store["posts"][number]): FeedPost {
     liked: p.likedBy.has(meId),
     reposts: p.repostedBy.size,
     reposted: p.repostedBy.has(meId),
+    bookmarked: p.bookmarkedBy.has(meId),
     comments: p.comments
       .sort((a, b) => a.at - b.at)
       .map((c) => {
@@ -532,7 +537,7 @@ export function listPosts(meId: string): FeedPost[] {
 
 export function addPost(meId: string, text: string, image?: string): FeedPost {
   const s = store();
-  const p = { id: "p_" + randomUUID().slice(0, 8), authorId: meId, text: text.trim(), image, at: Date.now(), likedBy: new Set<string>(), repostedBy: new Set<string>(), comments: [] };
+  const p = { id: "p_" + randomUUID().slice(0, 8), authorId: meId, text: text.trim(), image, at: Date.now(), likedBy: new Set<string>(), repostedBy: new Set<string>(), bookmarkedBy: new Set<string>(), comments: [] };
   s.posts.unshift(p);
   return toPostDTO(meId, p);
 }
@@ -551,6 +556,23 @@ export function toggleRepost(meId: string, postId: string): FeedPost | null {
   if (p.repostedBy.has(meId)) p.repostedBy.delete(meId);
   else p.repostedBy.add(meId);
   return toPostDTO(meId, p);
+}
+
+/** Toggle a saved/bookmarked post for this member. */
+export function toggleBookmark(meId: string, postId: string): FeedPost | null {
+  const p = store().posts.find((x) => x.id === postId);
+  if (!p) return null;
+  if (p.bookmarkedBy.has(meId)) p.bookmarkedBy.delete(meId);
+  else p.bookmarkedBy.add(meId);
+  return toPostDTO(meId, p);
+}
+
+/** The member's saved posts, newest-saved first. */
+export function listBookmarks(meId: string): FeedPost[] {
+  return store()
+    .posts.filter((p) => p.bookmarkedBy.has(meId))
+    .sort((a, b) => b.at - a.at)
+    .map((p) => toPostDTO(meId, p));
 }
 
 export function addComment(meId: string, postId: string, text: string): FeedPost | null {

@@ -39,6 +39,25 @@ export async function loadFeed(): Promise<{ available: boolean; posts: FeedPost[
   }
 }
 
+/**
+ * Posts + stories in one round trip. The Home tab needs both on every
+ * mount and every ~2.5s poll; calling them as two separate server actions
+ * meant two independent session look-ups and two client↔server hops for
+ * data that always travels together — this is the single request instead.
+ */
+export async function loadFeedBundle(): Promise<{ available: boolean; posts: FeedPost[]; stories: StoryDTO[] }> {
+  const u = await me();
+  if (!u) return { available: false, posts: [], stories: [] };
+  if (!usesDb(u.id)) return { available: true, posts: mem.listPosts(u.id), stories: [] };
+  try {
+    const [posts, stories] = await withRetry(() => Promise.all([fdb.listPosts(u.id), fdb.listStories(u.id)]));
+    return { available: true, posts, stories };
+  } catch (err) {
+    console.error("loadFeedBundle failed:", err);
+    return { available: false, posts: [], stories: [] };
+  }
+}
+
 /** Fan a "new post" alert out to other members (best-effort, capped). */
 async function announcePost(authorId: string, authorName: string): Promise<void> {
   try {
@@ -105,6 +124,24 @@ export async function repostPost(postId: string): Promise<{ ok: boolean; post?: 
   }
   const post = mem.toggleRepost(u.id, postId);
   return post ? { ok: true, post } : { ok: false };
+}
+
+export async function bookmarkPost(postId: string): Promise<{ ok: boolean; bookmarked?: boolean; post?: FeedPost }> {
+  const u = await me();
+  if (!u) return { ok: false };
+  if (usesDb(u.id)) {
+    const res = await fdb.toggleBookmark(u.id, postId);
+    return res === null ? { ok: false } : { ok: true, bookmarked: res };
+  }
+  const post = mem.toggleBookmark(u.id, postId);
+  return post ? { ok: true, bookmarked: post.bookmarked, post } : { ok: false };
+}
+
+export async function loadBookmarks(): Promise<{ available: boolean; posts: FeedPost[] }> {
+  const u = await me();
+  if (!u) return { available: false, posts: [] };
+  const posts = usesDb(u.id) ? await fdb.listBookmarks(u.id) : mem.listBookmarks(u.id);
+  return { available: true, posts };
 }
 
 export async function commentPost(postId: string, text: string): Promise<{ ok: boolean; post?: FeedPost }> {

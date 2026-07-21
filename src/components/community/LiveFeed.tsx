@@ -25,7 +25,7 @@ import {
   MoreHorizontal,
   Smile,
 } from "lucide-react";
-import { loadFeed, publishPost, likePost, repostPost, commentPost, loadStories, publishStory } from "@/app/actions/feed";
+import { loadFeedBundle, publishPost, likePost, repostPost, commentPost, bookmarkPost, publishStory } from "@/app/actions/feed";
 import type { StoryDTO } from "@/lib/feed-db";
 import type { FeedPost } from "@/lib/feed-types";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
@@ -116,15 +116,28 @@ export function LiveFeed({ me }: { me: { name: string; avatar?: string } }) {
     ? posts.filter((p) => p.text.toLowerCase().includes(activeTag.toLowerCase()))
     : posts;
 
-  const refresh = useCallback(async () => {
-    try {
-      const [res, s] = await Promise.all([loadFeed(), loadStories()]);
-      setPosts(res.posts);
-      setDbStories(s);
-      setLoaded(true);
-    } catch {
-      /* transient — the next poll recovers */
-    }
+  // Single-flight: if a poll tick and a manual refresh (e.g. right after
+  // posting) land at the same time, they share one network round trip
+  // instead of stacking two — this is what kept polls from piling up faster
+  // than they could drain, which used to make the whole app feel minutes
+  // behind under load.
+  const inFlightRef = useRef<Promise<void> | null>(null);
+  const refresh = useCallback((): Promise<void> => {
+    if (inFlightRef.current) return inFlightRef.current;
+    const p = (async () => {
+      try {
+        const res = await loadFeedBundle();
+        setPosts(res.posts);
+        setDbStories(res.stories);
+        setLoaded(true);
+      } catch {
+        /* transient — the next poll recovers */
+      } finally {
+        inFlightRef.current = null;
+      }
+    })();
+    inFlightRef.current = p;
+    return p;
   }, []);
 
   useEffect(() => {
@@ -177,6 +190,15 @@ export function LiveFeed({ me }: { me: { name: string; avatar?: string } }) {
     }
   }
 
+  async function onBookmark(id: string) {
+    setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, bookmarked: !p.bookmarked } : p)));
+    const res = await bookmarkPost(id);
+    if (res.ok) {
+      if (res.post) upsert(res.post);
+      else setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, bookmarked: !!res.bookmarked } : p)));
+    }
+  }
+
   function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     e.target.value = "";
@@ -202,7 +224,7 @@ export function LiveFeed({ me }: { me: { name: string; avatar?: string } }) {
             >
               <X className="h-4 w-4" />
             </button>
-            <PostCard post={focusPost} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} expanded />
+            <PostCard post={focusPost} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} onBookmark={onBookmark} expanded />
           </div>
         </div>
       )}
@@ -397,7 +419,7 @@ export function LiveFeed({ me }: { me: { name: string; avatar?: string } }) {
                 }}
                 className="cursor-pointer"
               >
-                <PostCard post={post} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} />
+                <PostCard post={post} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} onBookmark={onBookmark} />
               </div>
             ))}
             {loaded && visiblePosts.length > 0 && (
@@ -622,12 +644,13 @@ function StoryViewer({ stories, start, onClose }: { stories: Story[]; start: num
 
 /* ------------------------------- Post card ------------------------------- */
 
-function PostCard({
+export function PostCard({
   post,
   me,
   onLike,
   onRepost,
   onComment,
+  onBookmark,
   expanded = false,
 }: {
   post: FeedPost;
@@ -635,6 +658,7 @@ function PostCard({
   onLike: (id: string) => void;
   onRepost: (id: string) => void;
   onComment: (id: string, text: string) => void;
+  onBookmark: (id: string) => void;
   /** Focused single-post view — the conversation is open from the start. */
   expanded?: boolean;
 }) {
@@ -735,8 +759,17 @@ function PostCard({
             <Repeat2 className="h-[17px] w-[17px]" /> {fmt(post.reposts)}
           </button>
           <div className="flex-1" />
-          <button className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-brand)]/8 hover:text-[var(--color-brand-strong)]">
-            <Bookmark className="h-[17px] w-[17px]" />
+          <button
+            onClick={() => onBookmark(post.id)}
+            title={post.bookmarked ? "Saved — tap to remove" : "Save to bookmarks"}
+            aria-pressed={post.bookmarked}
+            className={`grid size-8 place-items-center rounded-full transition ${
+              post.bookmarked
+                ? "bg-[var(--color-brand)]/10 text-[var(--color-brand-strong)]"
+                : "text-[var(--color-muted)] hover:bg-[var(--color-brand)]/8 hover:text-[var(--color-brand-strong)]"
+            }`}
+          >
+            <Bookmark className={`h-[17px] w-[17px] ${post.bookmarked ? "fill-current" : ""}`} />
           </button>
           <button className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]">
             <Share2 className="h-[17px] w-[17px]" />

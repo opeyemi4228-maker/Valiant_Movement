@@ -72,7 +72,10 @@ export function CommunityChat({
   /* --- poll the thread + live-huddle banner (near real-time) --- */
   useEffect(() => {
     if (state !== "ready" || !conversationId) return;
+    let inFlight = false; // skip a tick rather than let slow polls pile up
     const t = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       // A failed poll keeps the current view; the next tick recovers.
       try {
         const [res, live] = await Promise.all([getMessages(conversationId), getActiveHuddle(community.id)]);
@@ -83,6 +86,8 @@ export function CommunityChat({
         setLiveHuddle(live);
       } catch {
         /* transient — retry on the next tick */
+      } finally {
+        inFlight = false;
       }
     }, 2500);
     return () => clearInterval(t);

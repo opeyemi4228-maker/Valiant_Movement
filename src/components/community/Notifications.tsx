@@ -69,9 +69,18 @@ export function Notifications({ title, bookmarks = false }: { title: string; boo
   useEffect(() => {
     if (bookmarks) return;
     let alive = true;
+    let inFlight = false; // skip a tick rather than let slow polls pile up
     const load = async () => {
-      const res = await getNotifications();
-      if (alive) { setItems(res.items); setLoaded(true); }
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const res = await getNotifications();
+        if (alive) { setItems(res.items); setLoaded(true); }
+      } catch {
+        /* transient — the next poll recovers */
+      } finally {
+        inFlight = false;
+      }
     };
     load();
     // Opening the tab marks them read a moment later, so the nav badge clears

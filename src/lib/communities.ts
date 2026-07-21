@@ -321,12 +321,31 @@ function geoTargets(g: MemberGeo): GeoTarget[] {
  * Ensure the State › LGA › Ward › Polling Unit communities exist for this
  * member's placement and that they're a member of each. Idempotent — safe to
  * call on every registration and on every load (self-heals older accounts).
+ *
+ * This runs on every Communities/Profile tab open, so the common case (a
+ * member who is already correctly placed — which is nearly always, after the
+ * first run) has to be cheap: one query checks whether all target slugs are
+ * already joined, and returns immediately if so. The expensive per-target
+ * create+join path (~5 sequential queries each) only runs for whatever is
+ * actually missing — new members, or a tier that didn't exist yet.
  */
 export async function ensureGeoCommunities(userId: string, geo?: MemberGeo | null): Promise<void> {
   const g = geo ?? (await memberGeo(userId));
   if (!g) return;
+  const targets = geoTargets(g);
+  if (targets.length === 0) return;
 
-  for (const t of geoTargets(g)) {
+  const slugs = targets.map((t) => t.slug);
+  const already = await db
+    .select({ slug: communities.slug })
+    .from(communityMembers)
+    .innerJoin(communities, eq(communities.id, communityMembers.communityId))
+    .where(and(eq(communityMembers.userId, userId), inArray(communities.slug, slugs)));
+  const haveSlugs = new Set(already.map((r) => r.slug));
+  const missing = targets.filter((t) => !haveSlugs.has(t.slug));
+  if (missing.length === 0) return; // fully placed already — one query, done
+
+  for (const t of missing) {
     try {
       const id = await ensureCommunity(t);
       await joinCommunity(id, userId);

@@ -1,6 +1,6 @@
 "use server";
 
-import { and, asc, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversationMembers, conversations, messages, profiles, users } from "@/db/schema";
 import { getCurrentUserSafe } from "@/lib/session";
@@ -136,7 +136,6 @@ async function getConversationsFor(id: string): Promise<ChatConversation[]> {
 
   if (memberships.length === 0) return [];
   const convoIds = memberships.map((m) => m.conversationId);
-  const lastReadById = new Map(memberships.map((m) => [m.conversationId, m.lastReadAt]));
   const metaById = new Map(memberships.map((m) => [m.conversationId, { type: m.type, title: m.title }]));
 
   // Other participant per conversation — direct chats only (groups can have
@@ -159,33 +158,58 @@ async function getConversationsFor(id: string): Promise<ChatConversation[]> {
 
   const otherByConvo = new Map(others.map((o) => [o.conversationId, o]));
 
-  const result: ChatConversation[] = [];
-  for (const cid of convoIds) {
+  // Batched — was 2 queries PER conversation (N+1); a member with 20 threads
+  // paid 40+ sequential round trips on every 2.5s poll, and overlapping polls
+  // piled up faster than they drained, which is what made sends feel like
+  // they took minutes. Now it's exactly 2 queries total, no matter how many
+  // conversations the member has.
+  interface LastRow extends Record<string, unknown> {
+    conversationId: string;
+    body: string | null;
+    media: unknown;
+    createdAt: string;
+  }
+  // Drizzle's `sql` tag spreads a JS array as a row constructor ($1, $2, …),
+  // not a Postgres ARRAY literal — build the ARRAY[...] explicitly so
+  // `= ANY(...)` gets a real uuid[] to compare against.
+  const convoIdArray = sql`ARRAY[${sql.join(convoIds.map((v) => sql`${v}`), sql`, `)}]::uuid[]`;
+  const lastRes = await db.execute<LastRow>(sql`
+    SELECT DISTINCT ON (conversation_id)
+      conversation_id AS "conversationId",
+      body,
+      media,
+      created_at AS "createdAt"
+    FROM messages
+    WHERE conversation_id = ANY(${convoIdArray})
+    ORDER BY conversation_id, created_at DESC
+  `);
+  const lastByConvo = new Map(lastRes.rows.map((r) => [r.conversationId, r]));
+
+  const unreadRows = await db
+    .select({ conversationId: messages.conversationId, n: sql<number>`count(*)::int` })
+    .from(messages)
+    .innerJoin(
+      conversationMembers,
+      and(eq(conversationMembers.conversationId, messages.conversationId), eq(conversationMembers.userId, id)),
+    )
+    .where(
+      and(
+        inArray(messages.conversationId, convoIds),
+        ne(messages.senderId, id),
+        // system events ("X joined") never count as unread
+        sql`(${messages.media}->>'kind') IS DISTINCT FROM 'system'`,
+        or(isNull(conversationMembers.lastReadAt), gt(messages.createdAt, conversationMembers.lastReadAt)),
+      ),
+    )
+    .groupBy(messages.conversationId);
+  const unreadByConvo = new Map(unreadRows.map((r) => [r.conversationId, r.n]));
+
+  const result: ChatConversation[] = convoIds.map((cid) => {
     const other = otherByConvo.get(cid);
-    const [last] = await db
-      .select({ body: messages.body, media: messages.media, createdAt: messages.createdAt })
-      .from(messages)
-      .where(eq(messages.conversationId, cid))
-      .orderBy(desc(messages.createdAt))
-      .limit(1);
-
-    const lastRead = lastReadById.get(cid) ?? null;
-    const [{ n }] = await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.conversationId, cid),
-          ne(messages.senderId, id),
-          // system events ("X joined") never count as unread
-          sql`(${messages.media}->>'kind') IS DISTINCT FROM 'system'`,
-          lastRead ? gt(messages.createdAt, lastRead) : undefined,
-        ),
-      );
-
+    const last = lastByConvo.get(cid);
     const meta = metaById.get(cid);
     const isGroup = meta?.type === "group";
-    result.push({
+    return {
       id: cid,
       type: isGroup ? "group" : "direct",
       otherId: isGroup ? null : other?.userId ?? null,
@@ -199,9 +223,9 @@ async function getConversationsFor(id: string): Promise<ChatConversation[]> {
       lastHasMedia: !!last?.media,
       lastMedia: (last?.media as ChatMedia | null) ?? null,
       lastAt: last?.createdAt ? new Date(last.createdAt).toISOString() : null,
-      unread: n ?? 0,
-    });
-  }
+      unread: unreadByConvo.get(cid) ?? 0,
+    };
+  });
 
   // newest activity first
   result.sort((a, b) => (b.lastAt ?? "").localeCompare(a.lastAt ?? ""));

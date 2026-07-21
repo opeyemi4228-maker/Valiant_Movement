@@ -20,6 +20,7 @@ import { Communities } from "./Communities";
 import { LiveChat } from "./LiveChat";
 import { MemberFinance } from "./MemberFinance";
 import { Notifications } from "./Notifications";
+import { Bookmarks } from "./Bookmarks";
 import { Profile } from "./Profile";
 import { Avatar } from "./Avatar";
 import { RealtimePresence } from "./RealtimePresence";
@@ -145,7 +146,7 @@ export function MemberShell({
           {tab === "messages" && <LiveChat />}
           {tab === "finance" && <MemberFinance name={name} />}
           {tab === "notifications" && <Notifications title={TITLES.notifications} />}
-          {tab === "bookmarks" && <Notifications title={TITLES.bookmarks} bookmarks />}
+          {tab === "bookmarks" && <Bookmarks me={me} />}
           {tab === "profile" && <Profile user={user} />}
         </main>
 

@@ -82,6 +82,7 @@ export async function listPosts(meId: string, limit = 100): Promise<FeedPost[]> 
 
   const liked = new Set(myReactions.filter((r) => r.type === "like").map((r) => r.postId));
   const reposted = new Set(myReactions.filter((r) => r.type === "repost").map((r) => r.postId));
+  const bookmarked = new Set(myReactions.filter((r) => r.type === "bookmark").map((r) => r.postId));
   const commentsByPost = new Map<string, FeedComment[]>();
   for (const r of replies) {
     const list = commentsByPost.get(r.parentId!) ?? [];
@@ -113,6 +114,7 @@ export async function listPosts(meId: string, limit = 100): Promise<FeedPost[]> 
       liked: liked.has(r.id),
       reposts: r.repostCount,
       reposted: reposted.has(r.id),
+      bookmarked: bookmarked.has(r.id),
       comments: commentsByPost.get(r.id) ?? [],
     };
   });
@@ -163,6 +165,41 @@ export async function toggleRepost(meId: string, postId: string): Promise<boolea
   const [p] = await db.select({ id: posts.id }).from(posts).where(eq(posts.id, postId)).limit(1);
   if (!p) return null;
   return toggleReaction(meId, postId, "repost");
+}
+
+/** Save/unsave a post (a "bookmark" reaction — no public counter). */
+export async function toggleBookmark(meId: string, postId: string): Promise<boolean | null> {
+  const [p] = await db.select({ id: posts.id }).from(posts).where(eq(posts.id, postId)).limit(1);
+  if (!p) return null;
+  const added = await db
+    .insert(postReactions)
+    .values({ postId, userId: meId, type: "bookmark" })
+    .onConflictDoNothing()
+    .returning({ postId: postReactions.postId });
+  if (added.length) return true;
+  await db
+    .delete(postReactions)
+    .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, meId), eq(postReactions.type, "bookmark")));
+  return false;
+}
+
+/** The viewer's saved posts, most-recently-saved first. */
+export async function listBookmarks(meId: string, limit = 100): Promise<FeedPost[]> {
+  const marks = await db
+    .select({ postId: postReactions.postId })
+    .from(postReactions)
+    .where(and(eq(postReactions.userId, meId), eq(postReactions.type, "bookmark")))
+    .orderBy(desc(postReactions.createdAt))
+    .limit(limit);
+  if (marks.length === 0) return [];
+  const order = new Map(marks.map((m, i) => [m.postId, i]));
+  const ids = marks.map((m) => m.postId);
+
+  const all = await listPosts(meId, 500);
+  return all
+    .filter((p) => order.has(p.id))
+    .sort((a, b) => (order.get(a.id)! - order.get(b.id)!))
+    .slice(0, ids.length);
 }
 
 export async function addComment(

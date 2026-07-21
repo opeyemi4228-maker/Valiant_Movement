@@ -157,22 +157,28 @@ export function LiveChat() {
   /* --- poll active thread + conversation list (near real-time) --- */
   useEffect(() => {
     if (state !== "ready") return;
+    let inFlight = false; // skip a tick rather than let slow polls pile up
     const t = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       // A failed poll (network blip, server hiccup) keeps the current view;
-      // the next tick recovers.
+      // the next tick recovers. Both requests run in parallel — they don't
+      // depend on each other.
       try {
-        if (activeId) {
-          const res = await getMessages(activeId);
-          if (res.ok) {
-            setMessages(res.messages);
-            setOtherReadAt(res.otherLastReadAt ?? null);
-          }
+        const [msgRes, list] = await Promise.all([
+          activeId ? getMessages(activeId) : Promise.resolve(null),
+          refreshConversations(),
+        ]);
+        if (msgRes?.ok) {
+          setMessages(msgRes.messages);
+          setOtherReadAt(msgRes.otherLastReadAt ?? null);
         }
-        const list = await refreshConversations();
         // keep unread at 0 for the conversation we're viewing
         if (list) setConvos(list.map((c) => (c.id === activeId ? { ...c, unread: 0 } : c)));
       } catch {
         /* transient — retry on the next tick */
+      } finally {
+        inFlight = false;
       }
     }, 2500);
     return () => clearInterval(t);
