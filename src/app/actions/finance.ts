@@ -4,6 +4,7 @@ import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb } from "@/lib/env";
 import { notify, hasRecentNotif } from "@/lib/notify";
 import { deductDues, getBalance } from "@/lib/wallet-db";
+import { fmtNaira } from "@/lib/wallet-types";
 
 /* ============================================================
    Finance notifications + the monthly-dues clock: reminders
@@ -17,10 +18,6 @@ import { deductDues, getBalance } from "@/lib/wallet-db";
 const DUES_NAIRA = 5_000;
 const DUE_DAY = 28; // dues collect on the 28th of every month
 const DAY_MS = 86_400_000;
-
-export function fmtNaira(n: number): string {
-  return "₦" + n.toLocaleString("en-NG");
-}
 
 export async function notifyFinanceEvent(
   kind: "deposit" | "withdrawal",

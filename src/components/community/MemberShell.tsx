@@ -2,6 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   Home,
   Users,
@@ -67,6 +68,18 @@ export function MemberShell({
   const [tab, setTab] = useState<Tab>("home");
   const [notifUnread, setNotifUnread] = useState(0);
   const name = user.fullName ?? "Member";
+  const searchParams = useSearchParams();
+
+  // Deep-link support: a payment-gateway redirect (or any external link)
+  // lands on /dashboard?tab=finance and opens straight to that tab.
+  useEffect(() => {
+    const id = setTimeout(() => {
+      const t = searchParams.get("tab") as Tab | null;
+      if (t && TITLES[t]) setTab(t);
+    }, 0); // after paint — no sync setState in the effect body
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Live notification badge — RealtimePresence broadcasts the unread count;
   // the toast's "open" action jumps to the notifications tab.

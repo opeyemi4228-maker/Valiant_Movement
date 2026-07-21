@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { ensureDuesNotifications, notifyFinanceEvent } from "@/app/actions/finance";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Wallet,
   HeartHandshake,
@@ -10,102 +10,119 @@ import {
   ArrowRight,
   CheckCircle2,
   Clock,
+  XCircle,
   Landmark,
   ArrowDownLeft,
   ArrowUpRight,
-  CreditCard,
-  Building2,
-  Smartphone,
   X,
   Loader2,
   Banknote,
   Eye,
   EyeOff,
+  AlertTriangle,
+  RefreshCcw,
 } from "lucide-react";
 import { naira, campaigns } from "@/data/finance";
+import { ensureDuesNotifications, getDuesStatus } from "@/app/actions/finance";
+import {
+  getWalletSummary,
+  initializeDeposit,
+  verifyDeposit,
+  listWithdrawalBanks,
+  resolveWithdrawalAccount,
+  requestWithdrawal,
+  type WalletSummary,
+} from "@/app/actions/wallet";
+import type { PaymentDTO } from "@/lib/wallet-db";
+import { fmtNaira, type PaymentKind } from "@/lib/wallet-types";
 
-/* ----------------------------- member ledger ----------------------------- */
-
-type TxType = "deposit" | "withdrawal" | "dues" | "donation" | "pledge";
-
-interface Tx {
-  id: string;
-  label: string;
-  detail: string;
-  date: string;
-  amount: number;
-  type: TxType;
-  status: "completed" | "pending";
-  direction: "in" | "out";
-}
-
-const SEED_TX: Tx[] = [
-  { id: "t1", label: "Withdrawal to GTBank", detail: "GTBank ••••1234", date: "18 Jun 2026", amount: 7_500, type: "withdrawal", status: "completed", direction: "out" },
-  { id: "t2", label: "Wallet top-up", detail: "Bank transfer", date: "15 Jun 2026", amount: 50_000, type: "deposit", status: "completed", direction: "in" },
-  { id: "t3", label: "Monthly dues", detail: "June 2026 · Card", date: "28 Jun 2026", amount: 5_000, type: "dues", status: "completed", direction: "out" },
-  { id: "t4", label: "2026 Mobilization Drive", detail: "One-time donation", date: "20 Jun 2026", amount: 25_000, type: "donation", status: "completed", direction: "out" },
-  { id: "t5", label: "Ward Town Halls Fund", detail: "Pledge · 3 of 6 paid", date: "12 Jun 2026", amount: 10_000, type: "pledge", status: "pending", direction: "out" },
-  { id: "t6", label: "Youth Bootcamp", detail: "One-time donation", date: "30 Apr 2026", amount: 15_000, type: "donation", status: "completed", direction: "out" },
-];
-
-const TYPE_META: Record<TxType, { icon: typeof Wallet; color: string }> = {
-  deposit: { icon: ArrowDownLeft, color: "var(--color-green)" },
-  withdrawal: { icon: ArrowUpRight, color: "var(--color-danger)" },
-  dues: { icon: CalendarCheck, color: "var(--color-brand-strong)" },
-  donation: { icon: HeartHandshake, color: "#7c3aed" },
-  pledge: { icon: Clock, color: "var(--color-amber)" },
+const TYPE_META: Record<PaymentKind, { icon: typeof Wallet; color: string; label: string; sign: "in" | "out" }> = {
+  deposit: { icon: ArrowDownLeft, color: "var(--color-green)", label: "Deposit", sign: "in" },
+  withdrawal: { icon: ArrowUpRight, color: "var(--color-danger)", label: "Withdrawal", sign: "out" },
+  dues: { icon: CalendarCheck, color: "var(--color-brand-strong)", label: "Membership dues", sign: "out" },
+  adjustment: { icon: Banknote, color: "var(--color-amber)", label: "Adjustment", sign: "in" },
 };
-
-const START_BALANCE = 42_500;
-
-function today() {
-  return new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-}
 
 export function MemberFinance({ name }: { name: string }) {
   const firstName = name.split(/\s+/)[0];
-  const [balance, setBalance] = useState(START_BALANCE);
-  const [txs, setTxs] = useState<Tx[]>(SEED_TX);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const [summary, setSummary] = useState<WalletSummary | null>(null);
   const [modal, setModal] = useState<"deposit" | "withdrawal" | null>(null);
   const [showBalance, setShowBalance] = useState(true);
+  const [dues, setDues] = useState<{ due: string; amount: number } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
-  const { deposited, withdrawn, given } = useMemo(() => {
-    let deposited = 0, withdrawn = 0, given = 0;
-    for (const t of txs) {
-      if (t.type === "deposit") deposited += t.amount;
-      else if (t.type === "withdrawal") withdrawn += t.amount;
-      else if (t.status === "completed") given += t.amount;
-    }
-    return { deposited, withdrawn, given };
-  }, [txs]);
-
-  // Run the monthly-dues clock (reminders 5→1 days out, then deduction or an
-  // insufficient-funds notice). Deduped server-side to one alert per day.
-  useEffect(() => {
-    ensureDuesNotifications(balance).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  const flash = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast((t) => (t === msg ? null : t)), 3600);
   }, []);
 
-  function handleConfirm(mode: "deposit" | "withdrawal", amount: number, detail: string) {
-    notifyFinanceEvent(mode, amount, detail).catch(() => {}); // bell confirmation
-    setBalance((b) => b + (mode === "deposit" ? amount : -amount));
-    setTxs((prev) => [
-      {
-        id: "tx-" + Date.now(),
-        label: mode === "deposit" ? "Wallet top-up" : "Withdrawal",
-        detail,
-        date: today(),
-        amount,
-        type: mode,
-        status: "completed",
-        direction: mode === "deposit" ? "in" : "out",
-      },
-      ...prev,
-    ]);
-  }
+  const refresh = useCallback(async () => {
+    const [s, d] = await Promise.all([getWalletSummary(), getDuesStatus()]);
+    setSummary(s);
+    setDues({ due: d.due, amount: d.amount });
+  }, []);
+
+  // Initial load + a background poll (deposits/withdrawals settle async, via
+  // webhook, so the balance can change without any action on this screen).
+  useEffect(() => {
+    const kick = setTimeout(() => {
+      refresh();
+      ensureDuesNotifications().catch(() => {});
+    }, 0); // after paint — no sync setState in the effect body
+    const t = setInterval(refresh, 4000);
+    return () => {
+      clearTimeout(kick);
+      clearInterval(t);
+    };
+  }, [refresh]);
+
+  // Returning from a Monnify checkout redirect: verify server-side (never
+  // trust the URL itself) and clean the query string either way.
+  useEffect(() => {
+    const ref = searchParams.get("financeRef");
+    if (!ref) return;
+    verifyDeposit(ref).then((res) => {
+      if (res.status === "paid") flash("✅ Deposit confirmed — your balance is updated.");
+      else if (res.status === "pending") flash("⏳ Deposit received — confirming with the bank, this can take a minute.");
+      else if (res.status === "failed") flash("Deposit didn't go through — no funds were taken.");
+      refresh();
+    });
+    router.replace("/dashboard?tab=finance");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const { deposited, withdrawn, duesThisMonth } = useMemo(() => {
+    let deposited = 0, withdrawn = 0;
+    let duesThisMonth = false;
+    const now = new Date();
+    for (const t of summary?.payments ?? []) {
+      if (t.status !== "completed") continue;
+      if (t.kind === "deposit") deposited += t.amount;
+      else if (t.kind === "withdrawal") withdrawn += t.amount;
+      else if (t.kind === "dues") {
+        const d = new Date(t.createdAt);
+        if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) duesThisMonth = true;
+      }
+    }
+    return { deposited, withdrawn, duesThisMonth };
+  }, [summary]);
+
+  const balance = summary?.balance ?? 0;
+  const loaded = summary !== null;
 
   return (
     <div className="h-full overflow-y-auto">
+      {toast && (
+        <div className="fixed inset-x-0 top-4 z-[75] flex justify-center px-4">
+          <div className="max-w-md rounded-2xl bg-[var(--color-navy)] px-4 py-2.5 text-center text-[13px] font-semibold text-white shadow-lg">
+            {toast}
+          </div>
+        </div>
+      )}
+
       <div className="w-full px-4 py-5 lg:px-8">
         {/* ============================== Wallet ============================== */}
         <div className="relative overflow-hidden rounded-3xl gradient-brand p-6 text-white shadow-sm">
@@ -116,14 +133,16 @@ export function MemberFinance({ name }: { name: string }) {
               <div className="flex items-center gap-2 text-sm font-semibold text-white/90">
                 <Wallet className="h-4 w-4" /> Valiant Wallet
               </div>
-              <span className="rounded-full bg-white/15 px-3 py-1 font-mono text-[11px] tracking-widest text-white/90 ring-1 ring-white/25">
-                •••• 4817
-              </span>
+              {loaded && !summary!.monnifyConfigured && (
+                <span className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-[11px] font-semibold text-white/90 ring-1 ring-white/25">
+                  <AlertTriangle className="h-3 w-3" /> Payments not connected
+                </span>
+              )}
             </div>
 
             <div className="mt-4 flex items-end gap-3">
               <div className="text-4xl font-extrabold tracking-tight tabular-nums">
-                {showBalance ? naira(balance) : "₦ • • • • •"}
+                {!loaded ? "···" : showBalance ? naira(balance) : "₦ • • • • •"}
               </div>
               <button
                 onClick={() => setShowBalance((v) => !v)}
@@ -134,19 +153,21 @@ export function MemberFinance({ name }: { name: string }) {
               </button>
             </div>
             <p className="mt-1 text-sm text-white/85">
-              Available balance · {firstName}, you&apos;ve given {naira(given, true)} to the movement 🦅
+              Available balance · {firstName}, every naira here funds real ward organising 🦅
             </p>
 
             <div className="mt-5 flex flex-wrap gap-3">
               <button
                 onClick={() => setModal("deposit")}
-                className="flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[var(--color-brand-strong)] shadow-sm transition hover:bg-white/90"
+                disabled={!loaded}
+                className="flex items-center gap-2 rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[var(--color-brand-strong)] shadow-sm transition hover:bg-white/90 disabled:opacity-50"
               >
                 <ArrowDownLeft className="h-4 w-4" /> Deposit
               </button>
               <button
                 onClick={() => setModal("withdrawal")}
-                className="flex items-center gap-2 rounded-full bg-white/15 px-5 py-2.5 text-sm font-bold text-white ring-1 ring-white/30 backdrop-blur transition hover:bg-white/25"
+                disabled={!loaded}
+                className="flex items-center gap-2 rounded-full bg-white/15 px-5 py-2.5 text-sm font-bold text-white ring-1 ring-white/30 backdrop-blur transition hover:bg-white/25 disabled:opacity-50"
               >
                 <ArrowUpRight className="h-4 w-4" /> Withdraw
               </button>
@@ -158,8 +179,13 @@ export function MemberFinance({ name }: { name: string }) {
         <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat icon={<ArrowDownLeft className="h-5 w-5" />} value={naira(deposited, true)} label="Deposited" good />
           <Stat icon={<ArrowUpRight className="h-5 w-5" />} value={naira(withdrawn, true)} label="Withdrawn" />
-          <Stat icon={<HeartHandshake className="h-5 w-5" />} value={naira(given, true)} label="Given" />
-          <Stat icon={<CheckCircle2 className="h-5 w-5" />} value="Paid" label="Dues — June" good />
+          <Stat icon={<HeartHandshake className="h-5 w-5" />} value={naira(0, true)} label="Given" />
+          <Stat
+            icon={duesThisMonth ? <CheckCircle2 className="h-5 w-5" /> : <Clock className="h-5 w-5" />}
+            value={duesThisMonth ? "Paid" : "Due"}
+            label={`Dues — ${new Date().toLocaleDateString("en-GB", { month: "short" })}`}
+            good={duesThisMonth}
+          />
         </div>
 
         <div className="mt-4 grid gap-4 lg:grid-cols-3">
@@ -171,25 +197,36 @@ export function MemberFinance({ name }: { name: string }) {
               </span>
               <h3 className="font-bold text-[var(--color-navy)]">Membership dues</h3>
             </div>
-            <div className="mt-4 flex items-center justify-between rounded-xl bg-[var(--color-green)]/8 px-3 py-2.5">
-              <span className="flex items-center gap-2 text-sm font-semibold text-[var(--color-green)]">
-                <CheckCircle2 className="h-4 w-4" /> June paid
+            <div
+              className={`mt-4 flex items-center justify-between rounded-xl px-3 py-2.5 ${
+                duesThisMonth ? "bg-[var(--color-green)]/8" : "bg-[var(--color-amber)]/10"
+              }`}
+            >
+              <span
+                className={`flex items-center gap-2 text-sm font-semibold ${
+                  duesThisMonth ? "text-[var(--color-green)]" : "text-[var(--color-amber)]"
+                }`}
+              >
+                {duesThisMonth ? <CheckCircle2 className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
+                {duesThisMonth ? "This month · paid" : "This month · pending"}
               </span>
-              <span className="text-sm font-bold text-[var(--color-ink)]">{naira(5_000)}</span>
+              <span className="text-sm font-bold text-[var(--color-ink)]">{fmtNaira(dues?.amount ?? 5_000)}</span>
             </div>
             <div className="mt-3 space-y-1 text-sm text-[var(--color-muted)]">
               <div className="flex justify-between">
                 <span>Next due</span>
-                <span className="font-semibold text-[var(--color-ink-soft)]">28 Jul 2026</span>
+                <span className="font-semibold text-[var(--color-ink-soft)]">
+                  {dues ? new Date(dues.due).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span>Plan</span>
-                <span className="font-semibold text-[var(--color-ink-soft)]">₦5,000 / month</span>
+                <span className="font-semibold text-[var(--color-ink-soft)]">{fmtNaira(dues?.amount ?? 5_000)} / month</span>
               </div>
             </div>
-            <button className="mt-4 w-full rounded-xl border border-[var(--color-line)] py-2.5 text-sm font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]">
-              Manage auto-pay
-            </button>
+            <p className="mt-4 text-xs text-[var(--color-faint)]">
+              Deducted automatically from your wallet on the due date — keep it funded and you&apos;re covered.
+            </p>
           </div>
 
           {/* ------------------ Campaigns to support ----------------- */}
@@ -200,6 +237,9 @@ export function MemberFinance({ name }: { name: string }) {
                   <HeartHandshake className="h-5 w-5" />
                 </span>
                 <h3 className="font-bold text-[var(--color-navy)]">Causes you can back</h3>
+                <span className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-faint)]">
+                  Preview
+                </span>
               </div>
               <span className="text-xs font-semibold text-[var(--color-faint)]">{campaigns.filter((c) => c.status === "active").length} active</span>
             </div>
@@ -222,7 +262,11 @@ export function MemberFinance({ name }: { name: string }) {
                           {naira(c.raised, true)} raised · {c.donors.toLocaleString()} donors
                         </div>
                       </div>
-                      <button className="shrink-0 rounded-full bg-[var(--color-navy)] px-4 py-2 text-xs font-bold text-white transition hover:opacity-90">
+                      <button
+                        disabled
+                        title="Campaign giving is coming soon"
+                        className="shrink-0 cursor-not-allowed rounded-full bg-[var(--color-navy)]/40 px-4 py-2 text-xs font-bold text-white"
+                      >
                         Give
                       </button>
                     </div>
@@ -236,38 +280,23 @@ export function MemberFinance({ name }: { name: string }) {
         <div className="mt-4 overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white">
           <div className="flex items-center justify-between border-b border-[var(--color-line)] p-4">
             <h3 className="font-bold text-[var(--color-navy)]">Recent transactions</h3>
-            <button className="flex items-center gap-1 text-xs font-semibold text-[var(--color-brand-strong)]">
-              Statement <ArrowRight className="h-3.5 w-3.5" />
+            <button onClick={refresh} className="flex items-center gap-1 text-xs font-semibold text-[var(--color-brand-strong)]">
+              <RefreshCcw className="h-3.5 w-3.5" /> Refresh
             </button>
           </div>
           <div className="divide-y divide-[var(--color-line-soft)]">
-            {txs.map((t) => {
-              const meta = TYPE_META[t.type];
-              const Icon = meta.icon;
-              const isIn = t.direction === "in";
-              return (
-                <div key={t.id} className="flex items-center gap-3 p-4 transition hover:bg-[var(--color-surface-2)]">
-                  <span
-                    className="grid size-10 shrink-0 place-items-center rounded-xl"
-                    style={{ backgroundColor: `color-mix(in srgb, ${meta.color} 12%, transparent)`, color: meta.color }}
-                  >
-                    <Icon className="h-5 w-5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-[var(--color-ink)]">{t.label}</div>
-                    <div className="truncate text-xs text-[var(--color-faint)]">{t.detail} · {t.date}</div>
-                  </div>
-                  {t.status === "pending" && (
-                    <span className="hidden rounded-full bg-[var(--color-amber)]/15 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-amber)] sm:inline">
-                      Pending
-                    </span>
-                  )}
-                  <span className={`shrink-0 text-sm font-bold tabular-nums ${isIn ? "text-[var(--color-green)]" : "text-[var(--color-ink)]"}`}>
-                    {isIn ? "+" : "−"} {naira(t.amount)}
-                  </span>
-                </div>
-              );
-            })}
+            {!loaded ? (
+              <div className="grid place-items-center py-14 text-sm text-[var(--color-faint)]">
+                <Loader2 className="h-5 w-5 animate-spin" />
+              </div>
+            ) : summary!.payments.length === 0 ? (
+              <div className="grid place-items-center px-6 py-14 text-center">
+                <ArrowRight className="mb-2 h-6 w-6 text-[var(--color-faint)]" />
+                <p className="text-sm text-[var(--color-muted)]">No transactions yet — your first deposit will show up here.</p>
+              </div>
+            ) : (
+              summary!.payments.map((t) => <TxRow key={t.id} t={t} />)
+            )}
           </div>
         </div>
 
@@ -281,207 +310,348 @@ export function MemberFinance({ name }: { name: string }) {
               <ShieldCheck className="h-4 w-4 text-[var(--color-green)]" /> Full transparency
             </div>
             <p className="mt-0.5 text-sm text-[var(--color-ink-soft)]">
-              Every deposit, withdrawal and contribution is recorded and auditable.
+              Every deposit, withdrawal and dues payment is recorded in your ledger, permanently and auditably.
             </p>
           </div>
-          <button className="rounded-full bg-[var(--color-navy)] px-4 py-2 text-sm font-bold text-white transition hover:opacity-90">
-            View ledger
-          </button>
         </div>
       </div>
 
-      {modal && (
-        <WalletModal
-          mode={modal}
-          balance={balance}
+      {modal === "deposit" && (
+        <DepositModal
           onClose={() => setModal(null)}
-          onConfirm={handleConfirm}
+          configured={summary?.monnifyConfigured ?? false}
+          onStarted={(msg) => flash(msg)}
+        />
+      )}
+      {modal === "withdrawal" && (
+        <WithdrawalModal
+          balance={balance}
+          configured={summary?.withdrawalsConfigured ?? false}
+          onClose={() => setModal(null)}
+          onDone={(msg) => {
+            flash(msg);
+            setModal(null);
+            refresh();
+          }}
         />
       )}
     </div>
   );
 }
 
-/* ============================= Wallet modal ============================= */
+/* -------------------------------- Tx row -------------------------------- */
+
+function TxRow({ t }: { t: PaymentDTO }) {
+  const meta = TYPE_META[t.kind];
+  const Icon = meta.icon;
+  const isIn = meta.sign === "in";
+  const label =
+    t.kind === "withdrawal" && t.destinationAccountName
+      ? `Withdrawal to ${t.destinationAccountName}`
+      : t.description ?? meta.label;
+  const date = new Date(t.createdAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+
+  return (
+    <div className="flex items-center gap-3 p-4 transition hover:bg-[var(--color-surface-2)]">
+      <span
+        className="grid size-10 shrink-0 place-items-center rounded-xl"
+        style={{ backgroundColor: `color-mix(in srgb, ${meta.color} 12%, transparent)`, color: meta.color }}
+      >
+        <Icon className="h-5 w-5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-semibold text-[var(--color-ink)]">{label}</div>
+        <div className="truncate text-xs text-[var(--color-faint)]">{date}</div>
+      </div>
+      {t.status === "pending" && (
+        <span className="hidden items-center gap-1 rounded-full bg-[var(--color-amber)]/15 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-amber)] sm:flex">
+          <Clock className="h-3 w-3" /> Pending
+        </span>
+      )}
+      {(t.status === "failed" || t.status === "reversed") && (
+        <span className="hidden items-center gap-1 rounded-full bg-[var(--color-danger)]/12 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-danger)] sm:flex">
+          <XCircle className="h-3 w-3" /> {t.status === "reversed" ? "Refunded" : "Failed"}
+        </span>
+      )}
+      <span
+        className={`shrink-0 text-sm font-bold tabular-nums ${
+          t.status !== "completed" ? "text-[var(--color-faint)]" : isIn ? "text-[var(--color-green)]" : "text-[var(--color-ink)]"
+        }`}
+      >
+        {isIn ? "+" : "−"} {naira(t.amount)}
+      </span>
+    </div>
+  );
+}
+
+/* ------------------------------ Deposit modal ------------------------------ */
 
 const QUICK = [5_000, 10_000, 25_000, 50_000];
 
-const METHODS = [
-  { id: "card", label: "Debit card", sub: "Visa •••• 4242", icon: CreditCard },
-  { id: "transfer", label: "Bank transfer", sub: "Virtual account", icon: Building2 },
-  { id: "ussd", label: "USSD", sub: "*737# & others", icon: Smartphone },
-];
-
-const BANKS = [
-  { id: "gt", label: "GTBank", sub: "••••1234", icon: Building2 },
-  { id: "access", label: "Access Bank", sub: "••••8890", icon: Building2 },
-];
-
-function WalletModal({
-  mode,
-  balance,
+function DepositModal({
   onClose,
-  onConfirm,
+  configured,
+  onStarted,
 }: {
-  mode: "deposit" | "withdrawal";
-  balance: number;
   onClose: () => void;
-  onConfirm: (mode: "deposit" | "withdrawal", amount: number, detail: string) => void;
+  configured: boolean;
+  onStarted: (msg: string) => void;
 }) {
-  const isDeposit = mode === "deposit";
-  const options = isDeposit ? METHODS : BANKS;
   const [raw, setRaw] = useState("");
-  const [choice, setChoice] = useState(options[0].id);
-  const [phase, setPhase] = useState<"form" | "processing" | "done">("form");
-
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const amount = Number(raw.replace(/\D/g, "")) || 0;
-  const overBalance = !isDeposit && amount > balance;
-  const canSubmit = amount >= 100 && !overBalance && phase === "form";
-  const chosen = options.find((o) => o.id === choice)!;
+  const canSubmit = amount >= 100 && !submitting && configured;
 
-  function submit() {
+  async function submit() {
     if (!canSubmit) return;
-    setPhase("processing");
-    setTimeout(() => {
-      onConfirm(mode, amount, isDeposit ? chosen.label : `${chosen.label} ${chosen.sub}`);
-      setPhase("done");
-    }, 850);
+    setSubmitting(true);
+    setError(null);
+    const res = await initializeDeposit(amount);
+    if (res.ok && res.checkoutUrl) {
+      onStarted("Redirecting you to complete the deposit securely…");
+      window.location.href = res.checkoutUrl; // full-page redirect to Monnify's hosted checkout
+      return;
+    }
+    setSubmitting(false);
+    setError(res.error ?? "Couldn't start the deposit — please try again.");
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={phase === "processing" ? undefined : onClose} />
-
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={submitting ? undefined : onClose} />
       <div className="animate-rise relative w-full max-w-md overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl">
-        {/* Header */}
         <div className="flex items-center justify-between border-b border-[var(--color-line)] p-4">
           <div className="flex items-center gap-2.5">
-            <span
-              className={`grid size-9 place-items-center rounded-xl ${
-                isDeposit ? "bg-[var(--color-green)]/12 text-[var(--color-green)]" : "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
-              }`}
-            >
-              {isDeposit ? <ArrowDownLeft className="h-5 w-5" /> : <ArrowUpRight className="h-5 w-5" />}
+            <span className="grid size-9 place-items-center rounded-xl bg-[var(--color-green)]/12 text-[var(--color-green)]">
+              <ArrowDownLeft className="h-5 w-5" />
             </span>
             <div>
-              <h3 className="font-bold text-[var(--color-navy)]">{isDeposit ? "Deposit to wallet" : "Withdraw funds"}</h3>
-              <p className="text-[11px] text-[var(--color-faint)]">
-                {isDeposit ? "Top up your Valiant Wallet" : `Available · ${naira(balance)}`}
-              </p>
+              <h3 className="font-bold text-[var(--color-navy)]">Deposit to wallet</h3>
+              <p className="text-[11px] text-[var(--color-faint)]">Top up your Valiant Wallet via Monnify</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            disabled={phase === "processing"}
+            disabled={submitting}
             className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)] disabled:opacity-40"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        {phase === "done" ? (
-          <div className="px-6 py-10 text-center">
-            <div className="mx-auto grid size-16 place-items-center rounded-full bg-[var(--color-green)]/12 text-[var(--color-green)]">
-              <CheckCircle2 className="h-9 w-9" />
+        <div className="p-5">
+          {!configured && (
+            <div className="mb-4 flex items-start gap-2.5 rounded-xl bg-[var(--color-amber)]/10 p-3 text-[13px] text-[var(--color-ink-soft)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-amber)]" />
+              Payments aren&apos;t connected yet. An admin needs to add Monnify API keys before deposits can be made.
             </div>
-            <h4 className="mt-4 text-xl font-extrabold text-[var(--color-navy)]">
-              {isDeposit ? "Deposit successful" : "Withdrawal queued"}
-            </h4>
-            <p className="mt-1 text-sm text-[var(--color-muted)]">
-              {naira(amount)} {isDeposit ? "added to your wallet" : `sent to ${chosen.label} ${chosen.sub}`}.
-            </p>
-            <button
-              onClick={onClose}
-              className="mt-6 w-full rounded-xl gradient-brand py-3 text-sm font-bold text-white transition hover:opacity-95"
-            >
-              Done
-            </button>
+          )}
+          <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Amount</label>
+          <div className="mt-1.5 flex items-center rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 focus-within:border-[var(--color-brand)] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--color-brand)]/12">
+            <span className="text-2xl font-extrabold text-[var(--color-faint)]">₦</span>
+            <input
+              autoFocus
+              inputMode="numeric"
+              value={amount ? amount.toLocaleString() : ""}
+              onChange={(e) => setRaw(e.target.value)}
+              placeholder="0"
+              className="w-full bg-transparent py-3.5 pl-2 text-2xl font-extrabold tabular-nums text-[var(--color-ink)] outline-none placeholder:text-[var(--color-faint)]"
+            />
           </div>
-        ) : (
-          <div className="p-5">
-            {/* Amount */}
-            <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Amount</label>
-            <div className="mt-1.5 flex items-center rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 focus-within:border-[var(--color-brand)] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--color-brand)]/12">
-              <span className="text-2xl font-extrabold text-[var(--color-faint)]">₦</span>
-              <input
-                autoFocus
-                inputMode="numeric"
-                value={amount ? amount.toLocaleString() : ""}
-                onChange={(e) => setRaw(e.target.value)}
-                placeholder="0"
-                className="w-full bg-transparent py-3.5 pl-2 text-2xl font-extrabold tabular-nums text-[var(--color-ink)] outline-none placeholder:text-[var(--color-faint)]"
-              />
-            </div>
-            {overBalance && (
-              <p className="mt-1.5 text-xs font-medium text-[var(--color-danger)]">
-                Amount exceeds your available balance.
-              </p>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {QUICK.map((q) => (
+              <button
+                key={q}
+                onClick={() => setRaw(String(q))}
+                className="rounded-full border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
+              >
+                {naira(q, true)}
+              </button>
+            ))}
+          </div>
+
+          {error && <p className="mt-3 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
+
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl gradient-brand py-3.5 text-sm font-bold text-white shadow-sm transition enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {submitting ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Redirecting…</>
+            ) : (
+              <><Banknote className="h-4 w-4" /> Deposit {amount ? naira(amount) : ""}</>
             )}
+          </button>
+          <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-[var(--color-faint)]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Secured by Monnify · card, bank transfer or USSD
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-            {/* Quick amounts */}
-            <div className="mt-3 flex flex-wrap gap-2">
-              {QUICK.map((q) => (
-                <button
-                  key={q}
-                  onClick={() => setRaw(String(q))}
-                  disabled={!isDeposit && q > balance}
-                  className="rounded-full border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {naira(q, true)}
-                </button>
-              ))}
+/* ----------------------------- Withdrawal modal ----------------------------- */
+
+function WithdrawalModal({
+  balance,
+  configured,
+  onClose,
+  onDone,
+}: {
+  balance: number;
+  configured: boolean;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+}) {
+  const [banks, setBanks] = useState<{ name: string; code: string }[]>([]);
+  const [banksLoading, setBanksLoading] = useState(true);
+  const [raw, setRaw] = useState("");
+  const [bankCode, setBankCode] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
+  const [accountName, setAccountName] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveError, setResolveError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      if (!configured) {
+        setBanksLoading(false);
+        return;
+      }
+      listWithdrawalBanks().then((b) => {
+        setBanks(b);
+        setBanksLoading(false);
+      });
+    }, 0); // after paint — no sync setState in the effect body
+    return () => clearTimeout(id);
+  }, [configured]);
+
+  const amount = Number(raw.replace(/\D/g, "")) || 0;
+  const overBalance = amount > balance;
+
+  // Resolve the account name once both bank + a full 10-digit number are set.
+  useEffect(() => {
+    let alive = true;
+    const id = setTimeout(() => {
+      setAccountName(null);
+      setResolveError(null);
+      if (!bankCode || accountNumber.length !== 10) return;
+      setResolving(true);
+      resolveWithdrawalAccount(accountNumber, bankCode).then((res) => {
+        if (!alive) return;
+        setResolving(false);
+        if (res.ok) setAccountName(res.accountName ?? null);
+        else setResolveError(res.error ?? "Couldn't verify that account.");
+      });
+    }, 0); // after paint — no sync setState in the effect body
+    return () => { alive = false; clearTimeout(id); };
+  }, [bankCode, accountNumber]);
+
+  const canSubmit = configured && amount >= 500 && !overBalance && !!accountName && !submitting;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    setError(null);
+    const res = await requestWithdrawal(amount, bankCode, accountNumber);
+    setSubmitting(false);
+    if (res.ok) onDone(`Withdrawal to ${accountName} is on its way.`);
+    else setError(res.error ?? "Couldn't process the withdrawal — please try again.");
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={submitting ? undefined : onClose} />
+      <div className="animate-rise relative w-full max-w-md overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl">
+        <div className="flex items-center justify-between border-b border-[var(--color-line)] p-4">
+          <div className="flex items-center gap-2.5">
+            <span className="grid size-9 place-items-center rounded-xl bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]">
+              <ArrowUpRight className="h-5 w-5" />
+            </span>
+            <div>
+              <h3 className="font-bold text-[var(--color-navy)]">Withdraw funds</h3>
+              <p className="text-[11px] text-[var(--color-faint)]">Available · {naira(balance)}</p>
             </div>
-
-            {/* Method / destination */}
-            <label className="mt-5 block text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">
-              {isDeposit ? "Pay with" : "Withdraw to"}
-            </label>
-            <div className="mt-1.5 space-y-2">
-              {options.map((o) => {
-                const Icon = o.icon;
-                const active = choice === o.id;
-                return (
-                  <button
-                    key={o.id}
-                    onClick={() => setChoice(o.id)}
-                    className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${
-                      active
-                        ? "border-[var(--color-brand)] bg-[var(--color-brand-tint)]"
-                        : "border-[var(--color-line)] hover:bg-[var(--color-surface-2)]"
-                    }`}
-                  >
-                    <span className="grid size-9 place-items-center rounded-lg bg-white text-[var(--color-brand-strong)] ring-1 ring-[var(--color-line)]">
-                      <Icon className="h-5 w-5" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold text-[var(--color-ink)]">{o.label}</div>
-                      <div className="text-xs text-[var(--color-faint)]">{o.sub}</div>
-                    </div>
-                    <span className={`grid size-5 place-items-center rounded-full border ${active ? "border-[var(--color-brand)] bg-[var(--color-brand)]" : "border-[var(--color-line)]"}`}>
-                      {active && <CheckCircle2 className="h-4 w-4 text-white" />}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Confirm */}
-            <button
-              onClick={submit}
-              disabled={!canSubmit}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl gradient-brand py-3.5 text-sm font-bold text-white shadow-sm transition enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {phase === "processing" ? (
-                <><Loader2 className="h-4 w-4 animate-spin" /> Processing…</>
-              ) : (
-                <><Banknote className="h-4 w-4" /> {isDeposit ? "Deposit" : "Withdraw"} {amount ? naira(amount) : ""}</>
-              )}
-            </button>
-            <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-[var(--color-faint)]">
-              <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Secured & encrypted · Valiant Movement
-            </p>
           </div>
-        )}
+          <button
+            onClick={onClose}
+            disabled={submitting}
+            className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)] disabled:opacity-40"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="max-h-[70vh] overflow-y-auto p-5">
+          {!configured && (
+            <div className="mb-4 flex items-start gap-2.5 rounded-xl bg-[var(--color-amber)]/10 p-3 text-[13px] text-[var(--color-ink-soft)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-amber)]" />
+              Withdrawals aren&apos;t connected yet. An admin needs to finish the payout setup with Monnify.
+            </div>
+          )}
+
+          <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Amount</label>
+          <div className="mt-1.5 flex items-center rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 focus-within:border-[var(--color-brand)] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--color-brand)]/12">
+            <span className="text-2xl font-extrabold text-[var(--color-faint)]">₦</span>
+            <input
+              autoFocus
+              inputMode="numeric"
+              value={amount ? amount.toLocaleString() : ""}
+              onChange={(e) => setRaw(e.target.value)}
+              placeholder="0"
+              disabled={!configured}
+              className="w-full bg-transparent py-3.5 pl-2 text-2xl font-extrabold tabular-nums text-[var(--color-ink)] outline-none placeholder:text-[var(--color-faint)] disabled:opacity-50"
+            />
+          </div>
+          {overBalance && <p className="mt-1.5 text-xs font-medium text-[var(--color-danger)]">Amount exceeds your available balance.</p>}
+
+          <label className="mt-5 block text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Bank</label>
+          <select
+            value={bankCode}
+            onChange={(e) => setBankCode(e.target.value)}
+            disabled={!configured || banksLoading}
+            className="mt-1.5 w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5 py-3 text-sm outline-none transition focus:border-[var(--color-brand)] focus:bg-white disabled:opacity-50"
+          >
+            <option value="">{banksLoading ? "Loading banks…" : "Select your bank…"}</option>
+            {banks.map((b) => (
+              <option key={b.code} value={b.code}>{b.name}</option>
+            ))}
+          </select>
+
+          <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Account number</label>
+          <input
+            value={accountNumber}
+            onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, "").slice(0, 10))}
+            inputMode="numeric"
+            placeholder="0123456789"
+            disabled={!configured}
+            className="mt-1.5 w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5 py-3 text-sm tracking-wider outline-none transition focus:border-[var(--color-brand)] focus:bg-white disabled:opacity-50"
+          />
+          <div className="mt-2 min-h-[20px] text-xs">
+            {resolving && <span className="flex items-center gap-1.5 text-[var(--color-muted)]"><Loader2 className="h-3 w-3 animate-spin" /> Verifying account…</span>}
+            {!resolving && accountName && <span className="flex items-center gap-1.5 font-semibold text-[var(--color-green)]"><CheckCircle2 className="h-3.5 w-3.5" /> {accountName}</span>}
+            {!resolving && resolveError && <span className="text-[var(--color-danger)]">{resolveError}</span>}
+          </div>
+
+          {error && <p className="mt-3 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
+
+          <button
+            onClick={submit}
+            disabled={!canSubmit}
+            className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl gradient-brand py-3.5 text-sm font-bold text-white shadow-sm transition enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {submitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Processing…</> : <><Banknote className="h-4 w-4" /> Withdraw {amount ? naira(amount) : ""}</>}
+          </button>
+          <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-[var(--color-faint)]">
+            <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Sent instantly via Monnify once confirmed
+          </p>
+        </div>
       </div>
     </div>
   );
