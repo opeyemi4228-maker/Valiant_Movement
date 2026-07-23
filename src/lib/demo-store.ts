@@ -450,7 +450,7 @@ function isMember(convId: string, meId: string): boolean {
 export function getMessages(
   meId: string,
   convId: string,
-): { ok: boolean; messages: ChatMessageDTO[]; otherLastReadAt?: string | null; error?: string } {
+): { ok: boolean; messages: ChatMessageDTO[]; otherLastReadAt?: string | null; otherOnline?: boolean; error?: string } {
   if (!isMember(convId, meId)) return { ok: false, messages: [], error: "forbidden" };
   const s = store();
   const msgs = s.messages.filter((m) => m.convId === convId).sort((a, b) => a.at - b.at);
@@ -464,6 +464,7 @@ export function getMessages(
   return {
     ok: true,
     otherLastReadAt,
+    otherOnline: true, // demo/showcase peers are always "online"
     messages: msgs.map((m) => ({
       id: m.id,
       body: m.body,

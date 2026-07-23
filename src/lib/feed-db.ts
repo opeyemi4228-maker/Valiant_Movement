@@ -34,20 +34,84 @@ const authorSelect = {
   avatar: profiles.avatarUrl,
 };
 
+const postSelect = {
+  id: posts.id,
+  authorId: posts.authorId,
+  body: posts.body,
+  media: posts.media,
+  likeCount: posts.likeCount,
+  replyCount: posts.replyCount,
+  repostCount: posts.repostCount,
+  createdAt: posts.createdAt,
+  ...authorSelect,
+};
+
+/** One fully-hydrated post — the authoritative result returned after a
+ *  like/repost/bookmark toggle, so the UI never has to guess-and-wait for
+ *  the next poll to find out whether the click actually landed. */
+export async function getPostDTO(meId: string, postId: string): Promise<FeedPost | null> {
+  const [r] = await db
+    .select(postSelect)
+    .from(posts)
+    .innerJoin(users, eq(users.id, posts.authorId))
+    .leftJoin(profiles, eq(profiles.userId, posts.authorId))
+    .where(eq(posts.id, postId))
+    .limit(1);
+  if (!r) return null;
+
+  const [myReactions, replies] = await Promise.all([
+    db
+      .select({ type: postReactions.type })
+      .from(postReactions)
+      .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, meId))),
+    db
+      .select({
+        id: posts.id,
+        authorId: posts.authorId,
+        body: posts.body,
+        createdAt: posts.createdAt,
+        ...authorSelect,
+      })
+      .from(posts)
+      .innerJoin(users, eq(users.id, posts.authorId))
+      .leftJoin(profiles, eq(profiles.userId, posts.authorId))
+      .where(eq(posts.parentId, postId))
+      .orderBy(posts.createdAt),
+  ]);
+
+  const types = new Set(myReactions.map((x) => x.type));
+  const media = (r.media ?? null) as { image?: string; community?: string } | null;
+  return {
+    id: r.id,
+    authorId: r.authorId,
+    authorName: authorName(r),
+    authorColor: colorFor(r.authorId),
+    authorPhoto: r.avatar ?? undefined,
+    text: r.body ?? "",
+    image: media?.image,
+    community: media?.community,
+    at: new Date(r.createdAt).toISOString(),
+    likes: r.likeCount,
+    liked: types.has("like"),
+    reposts: r.repostCount,
+    reposted: types.has("repost"),
+    bookmarked: types.has("bookmark"),
+    comments: replies.map((c) => ({
+      id: c.id,
+      authorId: c.authorId,
+      authorName: authorName(c),
+      authorColor: colorFor(c.authorId),
+      authorPhoto: c.avatar ?? undefined,
+      text: c.body ?? "",
+      at: new Date(c.createdAt).toISOString(),
+    })),
+  };
+}
+
 /** Top-level feed, newest first, with the viewer's like/repost state. */
 export async function listPosts(meId: string, limit = 100): Promise<FeedPost[]> {
   const rows = await db
-    .select({
-      id: posts.id,
-      authorId: posts.authorId,
-      body: posts.body,
-      media: posts.media,
-      likeCount: posts.likeCount,
-      replyCount: posts.replyCount,
-      repostCount: posts.repostCount,
-      createdAt: posts.createdAt,
-      ...authorSelect,
-    })
+    .select(postSelect)
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
     .leftJoin(profiles, eq(profiles.userId, posts.authorId))
@@ -154,21 +218,32 @@ async function toggleReaction(meId: string, postId: string, type: "like" | "repo
   return false;
 }
 
-export async function toggleLike(meId: string, postId: string): Promise<{ liked: boolean; authorId: string } | null> {
+export async function toggleLike(
+  meId: string,
+  postId: string,
+): Promise<{ liked: boolean; authorId: string; post: FeedPost } | null> {
   const [p] = await db.select({ authorId: posts.authorId }).from(posts).where(eq(posts.id, postId)).limit(1);
   if (!p) return null;
   const liked = await toggleReaction(meId, postId, "like");
-  return { liked, authorId: p.authorId };
+  const post = await getPostDTO(meId, postId);
+  if (!post) return null;
+  return { liked, authorId: p.authorId, post };
 }
 
-export async function toggleRepost(meId: string, postId: string): Promise<boolean | null> {
+export async function toggleRepost(meId: string, postId: string): Promise<{ reposted: boolean; post: FeedPost } | null> {
   const [p] = await db.select({ id: posts.id }).from(posts).where(eq(posts.id, postId)).limit(1);
   if (!p) return null;
-  return toggleReaction(meId, postId, "repost");
+  const reposted = await toggleReaction(meId, postId, "repost");
+  const post = await getPostDTO(meId, postId);
+  if (!post) return null;
+  return { reposted, post };
 }
 
 /** Save/unsave a post (a "bookmark" reaction — no public counter). */
-export async function toggleBookmark(meId: string, postId: string): Promise<boolean | null> {
+export async function toggleBookmark(
+  meId: string,
+  postId: string,
+): Promise<{ bookmarked: boolean; post: FeedPost } | null> {
   const [p] = await db.select({ id: posts.id }).from(posts).where(eq(posts.id, postId)).limit(1);
   if (!p) return null;
   const added = await db
@@ -176,11 +251,18 @@ export async function toggleBookmark(meId: string, postId: string): Promise<bool
     .values({ postId, userId: meId, type: "bookmark" })
     .onConflictDoNothing()
     .returning({ postId: postReactions.postId });
-  if (added.length) return true;
-  await db
-    .delete(postReactions)
-    .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, meId), eq(postReactions.type, "bookmark")));
-  return false;
+  let bookmarked: boolean;
+  if (added.length) {
+    bookmarked = true;
+  } else {
+    await db
+      .delete(postReactions)
+      .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, meId), eq(postReactions.type, "bookmark")));
+    bookmarked = false;
+  }
+  const post = await getPostDTO(meId, postId);
+  if (!post) return null;
+  return { bookmarked, post };
 }
 
 /** The viewer's saved posts, most-recently-saved first. */

@@ -43,7 +43,7 @@ const TYPE_META: Record<PaymentKind, { icon: typeof Wallet; color: string; label
   adjustment: { icon: Banknote, color: "var(--color-amber)", label: "Adjustment", sign: "in" },
 };
 
-export function MemberFinance({ name }: { name: string }) {
+export function MemberFinance({ name, active = true }: { name: string; active?: boolean }) {
   const firstName = name.split(/\s+/)[0];
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -68,6 +68,10 @@ export function MemberFinance({ name }: { name: string }) {
   // Initial load + a background poll (deposits/withdrawals settle async, via
   // webhook, so the balance can change without any action on this screen).
   useEffect(() => {
+    // Paused while another tab is active — this component stays mounted
+    // (so switching back is instant) but its background poll stands down;
+    // reactivating re-fires immediately below so the balance is never stale.
+    if (!active) return;
     const kick = setTimeout(() => {
       refresh();
       ensureDuesNotifications().catch(() => {});
@@ -77,7 +81,7 @@ export function MemberFinance({ name }: { name: string }) {
       clearTimeout(kick);
       clearInterval(t);
     };
-  }, [refresh]);
+  }, [refresh, active]);
 
   // Returning from a Monnify checkout redirect: verify server-side (never
   // trust the URL itself) and clean the query string either way.

@@ -70,7 +70,7 @@ export function RealtimePresence() {
       }
     };
     tick();
-    const t = setInterval(tick, 2000);
+    const t = setInterval(tick, 200); // tightened again — this drives incoming-call detection too
     return () => {
       alive = false;
       clearInterval(t);

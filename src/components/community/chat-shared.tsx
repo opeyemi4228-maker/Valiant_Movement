@@ -13,6 +13,10 @@ import {
   Pause,
   FileText,
   Download,
+  Phone,
+  PhoneMissed,
+  PhoneOff,
+  Video,
 } from "lucide-react";
 import type { ChatMedia } from "@/app/actions/chat";
 
@@ -189,6 +193,69 @@ export function AudioNote({ media, mine }: { media: ChatMedia; mine?: boolean })
           if (d && isFinite(d)) setDur(d);
         }}
       />
+    </div>
+  );
+}
+
+/* ------------------------------ call events ------------------------------ */
+
+/** An entry in a thread's call log — missed / declined / completed, for
+ *  both 1:1 calls and community huddles. Tapping it calls back / rejoins,
+ *  via whatever `onCallBack` does at the call site. */
+export function CallEventRow({
+  media,
+  mine,
+  at,
+  onCallBack,
+}: {
+  media: ChatMedia;
+  mine: boolean;
+  at: string;
+  onCallBack: () => void;
+}) {
+  const video = media.callMode === "video";
+  const missed = media.callStatus === "missed";
+  const declined = media.callStatus === "declined";
+  const label =
+    media.callStatus === "completed"
+      ? `${video ? "Video" : "Voice"} call`
+      : missed
+        ? mine
+          ? "No answer"
+          : `Missed ${video ? "video" : "voice"} call`
+        : mine
+          ? "Call declined"
+          : `Declined ${video ? "video" : "voice"} call`;
+  const Icon = missed ? PhoneMissed : declined ? PhoneOff : video ? Video : Phone;
+  const alert = missed && !mine; // the callee's missed call is the loud one
+  return (
+    <div className={`mt-2 flex ${mine ? "justify-end" : "justify-start"}`}>
+      <button
+        onClick={onCallBack}
+        title="Call back"
+        className={`flex items-center gap-2.5 rounded-2xl px-3 py-2 text-left shadow-sm transition hover:brightness-95 ${
+          mine ? "rounded-br-md bg-[var(--color-brand-tint)]" : "rounded-bl-md bg-white"
+        }`}
+      >
+        <span
+          className={`grid size-8 shrink-0 place-items-center rounded-full ${
+            alert
+              ? "bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+              : "bg-[var(--color-surface-2)] text-[var(--color-ink-soft)]"
+          }`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="flex flex-col items-start leading-tight">
+          <span className={`text-[13.5px] font-semibold ${alert ? "text-[var(--color-danger)]" : "text-[var(--color-ink)]"}`}>
+            {label}
+          </span>
+          <span className="text-[11px] text-[var(--color-faint)]">
+            {media.callStatus === "completed" && media.duration ? `${fmtTime(media.duration)} · ` : ""}
+            {clock(at)} · tap to call back
+          </span>
+        </span>
+      </button>
     </div>
   );
 }

@@ -11,7 +11,7 @@ import { PostCard } from "./LiveFeed";
  * saved post behaves identically to the Home feed (like, comment, repost).
  * Un-saving here removes it from the list immediately.
  */
-export function Bookmarks({ me }: { me: { name: string; avatar?: string } }) {
+export function Bookmarks({ me, active = true }: { me: { name: string; avatar?: string }; active?: boolean }) {
   const [posts, setPosts] = useState<FeedPost[]>([]);
   const [loaded, setLoaded] = useState(false);
 
@@ -22,10 +22,14 @@ export function Bookmarks({ me }: { me: { name: string; avatar?: string } }) {
   }, []);
 
   useEffect(() => {
+    // Paused while another tab is active — this component stays mounted
+    // (so switching back is instant) but its background poll stands down;
+    // reactivating re-fires immediately below so the list is never stale.
+    if (!active) return;
     const kick = setTimeout(refresh, 0);
     const t = setInterval(refresh, 5000);
     return () => { clearTimeout(kick); clearInterval(t); };
-  }, [refresh]);
+  }, [refresh, active]);
 
   function upsert(post: FeedPost) {
     setPosts((prev) => prev.map((p) => (p.id === post.id ? post : p)));

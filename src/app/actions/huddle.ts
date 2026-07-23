@@ -33,7 +33,10 @@ export async function pollCommunityHuddle(
   huddleId: string,
 ): Promise<{ ended: boolean; peers: HuddlePeerDTO[]; signals: HuddleSignalDTO[] }> {
   const u = await getCurrentUserSafe();
-  if (!u || !usesDb(u.id)) return { ended: true, peers: [], signals: [] };
+  // A momentary failure to read the session is NOT the huddle ending — saying
+  // "ended" here tore live calls down out of nowhere. Only a genuinely absent
+  // /finished huddle (decided in pollHuddle) ends the room.
+  if (!u || !usesDb(u.id)) return { ended: false, peers: [], signals: [] };
   try {
     return await hdb.pollHuddle(u.id, huddleId);
   } catch {

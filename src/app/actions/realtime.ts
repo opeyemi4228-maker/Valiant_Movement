@@ -1,5 +1,8 @@
 "use server";
 
+import { eq } from "drizzle-orm";
+import { db } from "@/db";
+import { users } from "@/db/schema";
 import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb } from "@/lib/env";
 import * as mem from "@/lib/demo-store";
@@ -119,6 +122,10 @@ export async function pollPresence(): Promise<{ incomingCall: CallSignal | null;
     const id = await me();
     if (!id) return { incomingCall: null, unread: 0 };
     if (usesDb(id)) {
+      // Heartbeat — "online" for chat read-receipt ticks is derived from how
+      // fresh this timestamp is. Fire-and-forget: it must never slow down
+      // the presence response itself.
+      void db.update(users).set({ lastActiveAt: new Date() }).where(eq(users.id, id)).catch(() => {});
       const [incomingCall, unread] = await Promise.all([cdb.incomingCallFor(id), cdb.unreadFor(id)]);
       return { incomingCall, unread };
     }

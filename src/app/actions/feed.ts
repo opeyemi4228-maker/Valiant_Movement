@@ -106,7 +106,7 @@ export async function likePost(postId: string): Promise<{ ok: boolean; post?: Fe
         href: "home",
       });
     }
-    return { ok: true };
+    return { ok: true, post: res.post };
   }
   const post = mem.toggleLike(u.id, postId);
   if (post && post.liked && post.authorId !== u.id) {
@@ -120,7 +120,7 @@ export async function repostPost(postId: string): Promise<{ ok: boolean; post?: 
   if (!u) return { ok: false };
   if (usesDb(u.id)) {
     const res = await fdb.toggleRepost(u.id, postId);
-    return res === null ? { ok: false } : { ok: true };
+    return res === null ? { ok: false } : { ok: true, post: res.post };
   }
   const post = mem.toggleRepost(u.id, postId);
   return post ? { ok: true, post } : { ok: false };
@@ -131,7 +131,7 @@ export async function bookmarkPost(postId: string): Promise<{ ok: boolean; bookm
   if (!u) return { ok: false };
   if (usesDb(u.id)) {
     const res = await fdb.toggleBookmark(u.id, postId);
-    return res === null ? { ok: false } : { ok: true, bookmarked: res };
+    return res === null ? { ok: false } : { ok: true, bookmarked: res.bookmarked, post: res.post };
   }
   const post = mem.toggleBookmark(u.id, postId);
   return post ? { ok: true, bookmarked: post.bookmarked, post } : { ok: false };

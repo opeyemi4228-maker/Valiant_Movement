@@ -61,13 +61,24 @@ const FILTERS = [
 ] as const;
 type FilterKey = (typeof FILTERS)[number]["key"];
 
-export function Notifications({ title, bookmarks = false }: { title: string; bookmarks?: boolean }) {
+export function Notifications({
+  title,
+  bookmarks = false,
+  active = true,
+}: {
+  title: string;
+  bookmarks?: boolean;
+  active?: boolean;
+}) {
   const [items, setItems] = useState<NotificationDTO[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState<FilterKey>("all");
 
   useEffect(() => {
-    if (bookmarks) return;
+    // Paused while another tab is active — this component stays mounted
+    // (so switching back is instant) but its background poll stands down;
+    // reactivating fires the load immediately below so the list is never stale.
+    if (bookmarks || !active) return;
     let alive = true;
     let inFlight = false; // skip a tick rather than let slow polls pile up
     const load = async () => {
@@ -88,7 +99,7 @@ export function Notifications({ title, bookmarks = false }: { title: string; boo
     const mark = setTimeout(() => { markNotificationsRead().catch(() => {}); }, 1200);
     const poll = setInterval(load, 5000);
     return () => { alive = false; clearTimeout(mark); clearInterval(poll); };
-  }, [bookmarks]);
+  }, [bookmarks, active]);
 
   const unreadCount = useMemo(() => items.filter((n) => !n.read).length, [items]);
 

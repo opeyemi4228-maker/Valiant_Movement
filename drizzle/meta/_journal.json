@@ -57,6 +57,13 @@
       "when": 1784612872933,
       "tag": "0007_cynical_mercury",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784788866110,
+      "tag": "0008_gray_firelord",
+      "breakpoints": true
     }
   ]
 }

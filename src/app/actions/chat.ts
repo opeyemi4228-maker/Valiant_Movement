@@ -90,23 +90,28 @@ export async function loadChat(): Promise<{
   // a DB is configured — their ids must never reach uuid columns.
   if (!usesDb(id)) return mem.loadChat(id);
 
-  // Other verified members you can message. First query after opening the
-  // tab — retried so a Neon cold start doesn't take down the page.
-  const memberRows = await withRetry(() =>
-    db
-      .select({
-        id: users.id,
-        email: users.email,
-        name: profiles.fullName,
-        username: profiles.username,
-        avatar: profiles.avatarUrl,
-      })
-      .from(users)
-      .leftJoin(profiles, eq(profiles.userId, users.id))
-      .where(ne(users.id, id))
-      .orderBy(asc(profiles.fullName))
-      .limit(200),
-  );
+  // "Members you can message" and "your conversations" don't depend on each
+  // other — fetch them concurrently instead of back-to-back. Each Neon HTTP
+  // round trip has real fixed latency, so this alone roughly halves the
+  // wait on opening the Messages tab.
+  const [memberRows, conversations] = await Promise.all([
+    withRetry(() =>
+      db
+        .select({
+          id: users.id,
+          email: users.email,
+          name: profiles.fullName,
+          username: profiles.username,
+          avatar: profiles.avatarUrl,
+        })
+        .from(users)
+        .leftJoin(profiles, eq(profiles.userId, users.id))
+        .where(ne(users.id, id))
+        .orderBy(asc(profiles.fullName))
+        .limit(200),
+    ),
+    getConversationsFor(id),
+  ]);
 
   const members: ChatMember[] = memberRows.map((m) => ({
     id: m.id,
@@ -116,7 +121,6 @@ export async function loadChat(): Promise<{
     avatar: m.avatar,
   }));
 
-  const conversations = await getConversationsFor(id);
   return { available: true, conversations, members };
 }
 
@@ -141,28 +145,14 @@ async function getConversationsFor(id: string): Promise<ChatConversation[]> {
   // Other participant per conversation — direct chats only (groups can have
   // thousands of members; their title comes from the conversation itself).
   const directIds = memberships.filter((m) => m.type !== "group").map((m) => m.conversationId);
-  const others = directIds.length
-    ? await db
-        .select({
-          conversationId: conversationMembers.conversationId,
-          userId: users.id,
-          email: users.email,
-          name: profiles.fullName,
-          avatar: profiles.avatarUrl,
-        })
-        .from(conversationMembers)
-        .innerJoin(users, eq(users.id, conversationMembers.userId))
-        .leftJoin(profiles, eq(profiles.userId, users.id))
-        .where(and(inArray(conversationMembers.conversationId, directIds), ne(conversationMembers.userId, id)))
-    : [];
-
-  const otherByConvo = new Map(others.map((o) => [o.conversationId, o]));
 
   // Batched — was 2 queries PER conversation (N+1); a member with 20 threads
-  // paid 40+ sequential round trips on every 2.5s poll, and overlapping polls
+  // paid 40+ sequential round trips on every poll, and overlapping polls
   // piled up faster than they drained, which is what made sends feel like
-  // they took minutes. Now it's exactly 2 queries total, no matter how many
-  // conversations the member has.
+  // they took minutes. Now it's exactly 3 queries total, no matter how many
+  // conversations the member has — and none of the 3 depend on each other
+  // (only on `memberships` above), so they run concurrently instead of
+  // back-to-back.
   interface LastRow extends Record<string, unknown> {
     conversationId: string;
     body: string | null;
@@ -173,35 +163,53 @@ async function getConversationsFor(id: string): Promise<ChatConversation[]> {
   // not a Postgres ARRAY literal — build the ARRAY[...] explicitly so
   // `= ANY(...)` gets a real uuid[] to compare against.
   const convoIdArray = sql`ARRAY[${sql.join(convoIds.map((v) => sql`${v}`), sql`, `)}]::uuid[]`;
-  const lastRes = await db.execute<LastRow>(sql`
-    SELECT DISTINCT ON (conversation_id)
-      conversation_id AS "conversationId",
-      body,
-      media,
-      created_at AS "createdAt"
-    FROM messages
-    WHERE conversation_id = ANY(${convoIdArray})
-    ORDER BY conversation_id, created_at DESC
-  `);
-  const lastByConvo = new Map(lastRes.rows.map((r) => [r.conversationId, r]));
 
-  const unreadRows = await db
-    .select({ conversationId: messages.conversationId, n: sql<number>`count(*)::int` })
-    .from(messages)
-    .innerJoin(
-      conversationMembers,
-      and(eq(conversationMembers.conversationId, messages.conversationId), eq(conversationMembers.userId, id)),
-    )
-    .where(
-      and(
-        inArray(messages.conversationId, convoIds),
-        ne(messages.senderId, id),
-        // system events ("X joined") never count as unread
-        sql`(${messages.media}->>'kind') IS DISTINCT FROM 'system'`,
-        or(isNull(conversationMembers.lastReadAt), gt(messages.createdAt, conversationMembers.lastReadAt)),
-      ),
-    )
-    .groupBy(messages.conversationId);
+  const [others, lastRes, unreadRows] = await Promise.all([
+    directIds.length
+      ? db
+          .select({
+            conversationId: conversationMembers.conversationId,
+            userId: users.id,
+            email: users.email,
+            name: profiles.fullName,
+            avatar: profiles.avatarUrl,
+          })
+          .from(conversationMembers)
+          .innerJoin(users, eq(users.id, conversationMembers.userId))
+          .leftJoin(profiles, eq(profiles.userId, users.id))
+          .where(and(inArray(conversationMembers.conversationId, directIds), ne(conversationMembers.userId, id)))
+      : Promise.resolve([]),
+    db.execute<LastRow>(sql`
+      SELECT DISTINCT ON (conversation_id)
+        conversation_id AS "conversationId",
+        body,
+        media,
+        created_at AS "createdAt"
+      FROM messages
+      WHERE conversation_id = ANY(${convoIdArray})
+      ORDER BY conversation_id, created_at DESC
+    `),
+    db
+      .select({ conversationId: messages.conversationId, n: sql<number>`count(*)::int` })
+      .from(messages)
+      .innerJoin(
+        conversationMembers,
+        and(eq(conversationMembers.conversationId, messages.conversationId), eq(conversationMembers.userId, id)),
+      )
+      .where(
+        and(
+          inArray(messages.conversationId, convoIds),
+          ne(messages.senderId, id),
+          // system events ("X joined") never count as unread
+          sql`(${messages.media}->>'kind') IS DISTINCT FROM 'system'`,
+          or(isNull(conversationMembers.lastReadAt), gt(messages.createdAt, conversationMembers.lastReadAt)),
+        ),
+      )
+      .groupBy(messages.conversationId),
+  ]);
+
+  const otherByConvo = new Map(others.map((o) => [o.conversationId, o]));
+  const lastByConvo = new Map(lastRes.rows.map((r) => [r.conversationId, r]));
   const unreadByConvo = new Map(unreadRows.map((r) => [r.conversationId, r.n]));
 
   const result: ChatConversation[] = convoIds.map((cid) => {
@@ -297,61 +305,84 @@ async function isMember(conversationId: string, userId: string): Promise<boolean
   return !!row;
 }
 
+/** A member counts as "online" if their presence heartbeat (updated on every
+ *  ~600ms poll while the app is open, in any tab) landed within this window. */
+const ONLINE_WINDOW_MS = 20_000;
+
 export async function getMessages(conversationId: string): Promise<{
   ok: boolean;
   messages: ChatMessageDTO[];
   /** When the other member last opened this thread — drives read receipts. */
   otherLastReadAt?: string | null;
+  /** Is at least one other member of this thread online right now? Drives
+   *  the single-tick (sent) vs double-tick (delivered) distinction. */
+  otherOnline?: boolean;
   error?: string;
 }> {
   const id = await meId();
   if (!id) return { ok: false, messages: [], error: "unauthenticated" };
   if (!usesDb(id)) return mem.getMessages(id, conversationId);
 
-  // Polled every ~2.5s — a transient Neon failure must degrade to "nothing
+  // Polled every ~200ms — a transient Neon failure must degrade to "nothing
   // new" (the client keeps what it has and the next poll recovers), never
-  // crash the page.
+  // crash the page. This is the hottest path in the whole app (every open
+  // thread + every poll tick hits it), so it's down to exactly ONE round
+  // trip: the membership check (which also gives us the other members'
+  // read/online state in the same query) and the messages fetch run
+  // concurrently instead of as 4 sequential queries. The "mark read" write
+  // doesn't gate this response at all (it only matters for the OTHER
+  // party's next poll), so it's fired without being awaited.
   try {
-    if (!(await withRetry(() => isMember(conversationId, id)))) {
+    const [memberRows, rows] = await withRetry(() =>
+      Promise.all([
+        db
+          .select({ userId: conversationMembers.userId, lastReadAt: conversationMembers.lastReadAt, lastActiveAt: users.lastActiveAt })
+          .from(conversationMembers)
+          .innerJoin(users, eq(users.id, conversationMembers.userId))
+          .where(eq(conversationMembers.conversationId, conversationId)),
+        db
+          .select({
+            id: messages.id,
+            body: messages.body,
+            media: messages.media,
+            senderId: messages.senderId,
+            createdAt: messages.createdAt,
+            senderName: profiles.fullName,
+            senderEmail: users.email,
+            senderAvatar: profiles.avatarUrl,
+          })
+          .from(messages)
+          .innerJoin(users, eq(users.id, messages.senderId))
+          .leftJoin(profiles, eq(profiles.userId, messages.senderId))
+          .where(eq(messages.conversationId, conversationId))
+          .orderBy(asc(messages.createdAt))
+          .limit(500),
+      ]),
+    );
+
+    if (!memberRows.some((m) => m.userId === id)) {
       return { ok: false, messages: [], error: "forbidden" };
     }
-
-    const others = await db
-      .select({ lastReadAt: conversationMembers.lastReadAt })
-      .from(conversationMembers)
-      .where(and(eq(conversationMembers.conversationId, conversationId), ne(conversationMembers.userId, id)));
+    const others = memberRows.filter((m) => m.userId !== id);
     // "Read" means every other member has seen it — use the earliest read mark.
     const otherLastReadAt = others.length && others.every((o) => o.lastReadAt)
       ? new Date(Math.min(...others.map((o) => o.lastReadAt!.getTime()))).toISOString()
       : null;
+    const otherOnline = others.some(
+      (o) => o.lastActiveAt && Date.now() - o.lastActiveAt.getTime() < ONLINE_WINDOW_MS,
+    );
 
-    const rows = await db
-      .select({
-        id: messages.id,
-        body: messages.body,
-        media: messages.media,
-        senderId: messages.senderId,
-        createdAt: messages.createdAt,
-        senderName: profiles.fullName,
-        senderEmail: users.email,
-        senderAvatar: profiles.avatarUrl,
-      })
-      .from(messages)
-      .innerJoin(users, eq(users.id, messages.senderId))
-      .leftJoin(profiles, eq(profiles.userId, messages.senderId))
-      .where(eq(messages.conversationId, conversationId))
-      .orderBy(asc(messages.createdAt))
-      .limit(500);
-
-    // Mark this conversation read for me.
-    await db
+    // Mark this conversation read for me — best-effort, doesn't block the response.
+    void db
       .update(conversationMembers)
       .set({ lastReadAt: new Date() })
-      .where(and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, id)));
+      .where(and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, id)))
+      .catch(() => {});
 
     return {
       ok: true,
       otherLastReadAt,
+      otherOnline,
       messages: rows.map((r) => ({
         id: r.id,
         body: r.body,

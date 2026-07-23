@@ -343,7 +343,7 @@ no UI change, just replacing `getWards`/`getPollingUnits` in
 | Valiant AI assistant | ⚪ Scripted responses, not a live LLM |
 | Admin/Super Admin dashboards | ⚪ Fully designed, mock data throughout |
 | Campaign giving ("Causes you can back") | ⚪ Preview UI, not wired to the wallet |
-
+ 
 ---
 
 ## 6. Architecture notes worth knowing

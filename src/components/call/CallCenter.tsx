@@ -141,7 +141,7 @@ export function CallCenter() {
         setOutStatus(sig.status === "declined" ? "Call declined" : sig.status === "missed" ? "No answer" : "Call ended");
         setTimeout(() => { if (alive) { setOutgoing(null); setOutStatus(undefined); } }, 1800);
       }
-    }, 600); // poll pickup quickly so the caller enters the room right after accept
+    }, 200); // poll pickup fast so accepting a call connects instantly
     return () => { alive = false; clearInterval(t); };
   }, [outgoing]);
 
@@ -171,17 +171,17 @@ export function CallCenter() {
         return;
       }
       // A missing signal is usually transient (serverless lag / brief store
-      // miss). Only give up after several consecutive misses (~9s) so a live
-      // call is never cut short by a single failed poll.
+      // miss). Only give up after several consecutive misses (~9s total) so
+      // a live call is never cut short by a single failed poll.
       if (!sig) {
-        if (++misses >= 6) {
+        if (++misses >= 20) {
           clearInterval(t);
           setInCall((c) => (c ? { ...c, remoteEnded: true } : null));
         }
       } else {
         misses = 0;
       }
-    }, 1500);
+    }, 450); // tightened again — 2x faster, miss-tolerance doubled to keep the same ~9s grace
     return () => { alive = false; clearInterval(t); };
   }, [inCall]);
 

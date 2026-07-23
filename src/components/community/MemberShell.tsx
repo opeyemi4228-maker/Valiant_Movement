@@ -2,7 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element */
 import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   Home,
   Users,
@@ -65,33 +65,38 @@ export function MemberShell({
 }: {
   user: { fullName: string | null; email: string; status: string; avatarUrl?: string | null };
 }) {
-  const [tab, setTab] = useState<Tab>("home");
-  const [notifUnread, setNotifUnread] = useState(0);
-  const name = user.fullName ?? "Member";
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // Deep-link support: a payment-gateway redirect (or any external link)
-  // lands on /dashboard?tab=finance and opens straight to that tab.
-  useEffect(() => {
-    const id = setTimeout(() => {
-      const t = searchParams.get("tab") as Tab | null;
-      if (t && TITLES[t]) setTab(t);
-    }, 0); // after paint — no sync setState in the effect body
-    return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // The URL is the source of truth for the active tab — read synchronously
+  // (not in an effect) so a hard reload lands straight on the tab the user
+  // left instead of flashing Home first. This route is already dynamic
+  // (session cookies are read server-side), so the server and client agree
+  // on searchParams from the first render — no hydration mismatch.
+  const initialTab: Tab = (() => {
+    const t = searchParams.get("tab") as Tab | null;
+    return t && TITLES[t] ? t : "home";
+  })();
+  const [tab, setTab] = useState<Tab>(initialTab);
+  // Every tab the member has opened this session stays mounted (hidden via
+  // CSS instead of unmounted) so switching back is instant — no re-fetch,
+  // no skeleton flash. Only the very first visit to a tab pays that cost.
+  const [visited, setVisited] = useState<Set<Tab>>(() => new Set([initialTab]));
+  const [notifUnread, setNotifUnread] = useState(0);
+  const name = user.fullName ?? "Member";
 
   // Live notification badge — RealtimePresence broadcasts the unread count;
   // the toast's "open" action jumps to the notifications tab.
   useEffect(() => {
     const onCount = (e: Event) => setNotifUnread((e as CustomEvent<number>).detail ?? 0);
-    const onOpen = () => setTab("notifications");
+    const onOpen = () => go("notifications");
     window.addEventListener("valiant:notif-unread", onCount);
     window.addEventListener("valiant:open-notifications", onOpen);
     return () => {
       window.removeEventListener("valiant:notif-unread", onCount);
       window.removeEventListener("valiant:open-notifications", onOpen);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const handle = "@" + name.toLowerCase().replace(/\s+/g, "_");
 
@@ -99,6 +104,18 @@ export function MemberShell({
 
   function go(t: Tab) {
     setTab(t);
+    setVisited((prev) => (prev.has(t) ? prev : new Set(prev).add(t)));
+    // Mirror the tab into the URL via the native History API — NOT
+    // router.replace(). This route is fully dynamic (session cookies read
+    // server-side on every request), so router.replace would re-hit the
+    // server on every single tab click, undoing the "instant switch" fix
+    // below. history.replaceState updates the URL (and stays in sync with
+    // usePathname/useSearchParams) with zero server round-trip.
+    const params = new URLSearchParams(searchParams.toString());
+    if (t === "home") params.delete("tab");
+    else params.set("tab", t);
+    const qs = params.toString();
+    window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
   }
 
   // Keep the active tab highlighted/expanded in the bottom pill. Tabs reached
@@ -152,15 +169,46 @@ export function MemberShell({
           </button>
         </header>
 
-        {/* Content */}
+        {/* Content — once a tab has been visited it stays mounted (hidden via
+            CSS instead of unmounted) so switching back to it is instant: no
+            re-fetch, no skeleton flash. Each panel's own poll pauses while
+            hidden and fires immediately the moment it's shown again. */}
         <main className="min-h-0 flex-1 overflow-hidden">
-          {tab === "home" && <LiveFeed me={me} />}
-          {tab === "communities" && <Communities />}
-          {tab === "messages" && <LiveChat />}
-          {tab === "finance" && <MemberFinance name={name} />}
-          {tab === "notifications" && <Notifications title={TITLES.notifications} />}
-          {tab === "bookmarks" && <Bookmarks me={me} />}
-          {tab === "profile" && <Profile user={user} />}
+          {visited.has("home") && (
+            <div className={tab === "home" ? "h-full" : "hidden"}>
+              <LiveFeed me={me} active={tab === "home"} />
+            </div>
+          )}
+          {visited.has("communities") && (
+            <div className={tab === "communities" ? "h-full" : "hidden"}>
+              <Communities />
+            </div>
+          )}
+          {visited.has("messages") && (
+            <div className={tab === "messages" ? "h-full" : "hidden"}>
+              <LiveChat active={tab === "messages"} />
+            </div>
+          )}
+          {visited.has("finance") && (
+            <div className={tab === "finance" ? "h-full" : "hidden"}>
+              <MemberFinance name={name} active={tab === "finance"} />
+            </div>
+          )}
+          {visited.has("notifications") && (
+            <div className={tab === "notifications" ? "h-full" : "hidden"}>
+              <Notifications title={TITLES.notifications} active={tab === "notifications"} />
+            </div>
+          )}
+          {visited.has("bookmarks") && (
+            <div className={tab === "bookmarks" ? "h-full" : "hidden"}>
+              <Bookmarks me={me} active={tab === "bookmarks"} />
+            </div>
+          )}
+          {visited.has("profile") && (
+            <div className={tab === "profile" ? "h-full" : "hidden"}>
+              <Profile user={user} />
+            </div>
+          )}
         </main>
 
         {/* Mobile bottom tab bar — expandable pill that reveals the active

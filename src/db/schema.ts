@@ -133,6 +133,10 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   emailVerified: boolean("email_verified").notNull().default(false),
   status: userStatus("status").notNull().default("pending"),
+  // Heartbeat, updated on every presence poll while the app is open (any
+  // tab) — drives the chat "online" tick (single ✓ vs double ✓✓). Null
+  // means "never seen online".
+  lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()

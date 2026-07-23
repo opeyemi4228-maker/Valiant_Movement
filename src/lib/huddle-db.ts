@@ -21,8 +21,11 @@ import { notify } from "./notify";
    derive their role without negotiation).
    ============================================================ */
 
-/** A peer is "in the room" while its heartbeat is fresher than this. */
-const PEER_TTL_MS = 20_000;
+/** A peer is "in the room" while its heartbeat is fresher than this. Kept
+ *  generous (well beyond the 1.2s poll cadence) because mobile browsers
+ *  throttle timers hard on a backgrounded tab — a member who briefly
+ *  switches apps mid-call must not be treated as gone. */
+const PEER_TTL_MS = 45_000;
 
 export interface HuddlePeerDTO {
   id: string;
@@ -52,7 +55,15 @@ function pair(me: string, other: string): { aId: string; bId: string } {
   return me < other ? { aId: me, bId: other } : { aId: other, bId: me };
 }
 
-/** The community's live huddle (if any) — for the "join" banner. */
+/**
+ * The community's live huddle (if any) — for the "join" banner. PURE READ:
+ * this is polled every ~2.5s by anyone viewing the community chat, whether
+ * or not they're in the call, so it must never have a side effect that can
+ * end a room mid-call. A momentary zero-fresh-peers read here (network
+ * jitter, a backgrounded participant's tab) just means the banner doesn't
+ * show this instant — it is NOT evidence the room should be torn down.
+ * Actual room teardown only happens via `leaveHuddle` (an explicit leave).
+ */
 export async function activeHuddleFor(
   communityId: string,
 ): Promise<{ huddleId: string; mode: string; count: number } | null> {
@@ -76,11 +87,7 @@ export async function activeHuddleFor(
     .select({ n: sql<number>`count(*)::int` })
     .from(huddlePeers)
     .where(and(eq(huddlePeers.huddleId, h.id), isNull(huddlePeers.leftAt), gt(huddlePeers.lastSeenAt, fresh)));
-  if (n === 0) {
-    // everyone's heartbeat died (closed tabs) — retire the room
-    await db.update(huddles).set({ endedAt: new Date() }).where(and(eq(huddles.id, h.id), isNull(huddles.endedAt)));
-    return null;
-  }
+  if (n === 0) return null; // nothing to show right now — the room itself is untouched
   return { huddleId: h.id, mode: h.mode, count: n };
 }
 
@@ -227,8 +234,53 @@ export async function leaveHuddle(userId: string, huddleId: string): Promise<voi
     .select({ n: sql<number>`count(*)::int` })
     .from(huddlePeers)
     .where(and(eq(huddlePeers.huddleId, huddleId), isNull(huddlePeers.leftAt), gt(huddlePeers.lastSeenAt, fresh)));
-  if (n === 0) {
-    await db.update(huddles).set({ endedAt: new Date() }).where(and(eq(huddles.id, huddleId), isNull(huddles.endedAt)));
+  if (n !== 0) return; // still others in the room — nothing to close out yet
+
+  const flipped = await db
+    .update(huddles)
+    .set({ endedAt: new Date() })
+    .where(and(eq(huddles.id, huddleId), isNull(huddles.endedAt)))
+    .returning({
+      conversationId: huddles.conversationId,
+      mode: huddles.mode,
+      startedBy: huddles.startedBy,
+      startedAt: huddles.startedAt,
+    });
+  if (flipped.length === 0) return; // someone else's concurrent call already closed it out
+  const h = flipped[0];
+
+  // Did anyone besides the starter ever actually join? (existence, not
+  // freshness — this is a historical fact about the whole call, not a
+  // liveness check.) If not, it's a missed call for the whole community,
+  // exactly like an unanswered 1:1 call.
+  const others = await db
+    .select({ userId: huddlePeers.userId })
+    .from(huddlePeers)
+    .where(and(eq(huddlePeers.huddleId, huddleId), ne(huddlePeers.userId, h.startedBy)))
+    .limit(1);
+
+  try {
+    if (others.length === 0) {
+      await db.insert(messages).values({
+        conversationId: h.conversationId,
+        senderId: h.startedBy,
+        body: null,
+        media: { kind: "call", callMode: h.mode, callStatus: "missed" },
+        deliveredAt: new Date(),
+      });
+    } else {
+      const durationSec = Math.max(1, Math.round((Date.now() - h.startedAt.getTime()) / 1000));
+      await db.insert(messages).values({
+        conversationId: h.conversationId,
+        senderId: h.startedBy,
+        body: null,
+        media: { kind: "call", callMode: h.mode, callStatus: "completed", duration: durationSec },
+        deliveredAt: new Date(),
+      });
+    }
+  } catch (err) {
+    // The huddle ending correctly must never hinge on this log entry.
+    console.error("huddle call-event log failed:", err);
   }
 }
 

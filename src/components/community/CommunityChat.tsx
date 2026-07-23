@@ -8,7 +8,7 @@ import { getActiveHuddle, startCommunityHuddle } from "@/app/actions/huddle";
 import { HuddleRoom } from "@/components/call/HuddleRoom";
 import type { CommunityDTO } from "@/lib/communities";
 import { Avatar } from "./Avatar";
-import { AudioNote, Composer, FileCard, ImageMedia, clock, colorFor } from "./chat-shared";
+import { AudioNote, CallEventRow, Composer, FileCard, ImageMedia, clock, colorFor } from "./chat-shared";
 
 /* ============================================================
    Community group chat — WhatsApp-style. Every member of the
@@ -38,6 +38,7 @@ export function CommunityChat({
   const [memberCount, setMemberCount] = useState(community.memberCount);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [otherReadAt, setOtherReadAt] = useState<string | null>(null);
+  const [otherOnline, setOtherOnline] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [huddle, setHuddle] = useState<{ huddleId: string; meId: string; mode: "voice" | "video" } | null>(null);
   const [liveHuddle, setLiveHuddle] = useState<{ huddleId: string; mode: string; count: number } | null>(null);
@@ -45,6 +46,20 @@ export function CommunityChat({
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastCountRef = useRef(0);
+  // Every getMessages fetch (initial load, confirm-send reload, background
+  // poll) is tagged with a sequence number so a stale in-flight response
+  // (e.g. a poll issued just before a send, resolving just after) can never
+  // overwrite the freshly-sent message with the pre-send list — that race
+  // was what made a just-sent message flash and then briefly disappear.
+  const msgSeqRef = useRef(0);
+  // While a send's own round trip is in flight (including its confirm
+  // reload), the background poll must not touch `messages` at all — even
+  // its NEWEST request can race the insert at the database layer and read
+  // a snapshot from just before the send committed, which the sequence
+  // guard above can't catch on its own (that response isn't stale, it's
+  // just early). Blanking this window out is what stops a sent message
+  // from flashing away and reappearing a poll cycle later.
+  const sendingRef = useRef(0);
 
   /* --- join the group + first load --- */
   useEffect(() => {
@@ -59,10 +74,12 @@ export function CommunityChat({
       setConversationId(res.chat.conversationId);
       setMemberCount(res.chat.memberCount);
       setState("ready");
+      const seq = ++msgSeqRef.current;
       getMessages(res.chat.conversationId).then((m) => {
-        if (alive && m.ok) {
+        if (alive && m.ok && seq === msgSeqRef.current) {
           setMessages(m.messages);
           setOtherReadAt(m.otherLastReadAt ?? null);
+          setOtherOnline(m.otherOnline ?? false);
         }
       });
     });
@@ -76,12 +93,17 @@ export function CommunityChat({
     const t = setInterval(async () => {
       if (inFlight) return;
       inFlight = true;
+      const seq = ++msgSeqRef.current;
       // A failed poll keeps the current view; the next tick recovers.
       try {
         const [res, live] = await Promise.all([getMessages(conversationId), getActiveHuddle(community.id)]);
-        if (res.ok) {
+        // Drop this response if a newer fetch (e.g. the confirm-send reload)
+        // has been issued since, or if a send is currently mid-flight — see
+        // msgSeqRef / sendingRef above.
+        if (res.ok && seq === msgSeqRef.current && sendingRef.current === 0) {
           setMessages(res.messages);
           setOtherReadAt(res.otherLastReadAt ?? null);
+          setOtherOnline(res.otherOnline ?? false);
         }
         setLiveHuddle(live);
       } catch {
@@ -89,7 +111,7 @@ export function CommunityChat({
       } finally {
         inFlight = false;
       }
-    }, 2500);
+    }, 200); // tightened again — as fast as this architecture allows
     return () => clearInterval(t);
   }, [state, conversationId, community.id]);
 
@@ -136,28 +158,35 @@ export function CommunityChat({
         at: new Date().toISOString(),
       };
       setMessages((m) => [...m, optimistic]);
-      let res: Awaited<ReturnType<typeof sendMessage>>;
+      sendingRef.current++;
       try {
-        res = await sendMessage(conversationId, body, media ?? null);
-      } catch {
-        res = { ok: false, error: "network" };
-      }
-      if (res.ok) {
-        if (res.flagged) {
-          setToast("⚠️ Flagged for review — your Ward Captain & LGA Coordinator were notified.");
-          setTimeout(() => setToast(null), 3200);
+        let res: Awaited<ReturnType<typeof sendMessage>>;
+        try {
+          res = await sendMessage(conversationId, body, media ?? null);
+        } catch {
+          res = { ok: false, error: "network" };
         }
-        const fresh = await getMessages(conversationId);
-        if (fresh.ok) {
-          setMessages(fresh.messages);
-          setOtherReadAt(fresh.otherLastReadAt ?? null);
+        if (res.ok) {
+          if (res.flagged) {
+            setToast("⚠️ Flagged for review — your Ward Captain & LGA Coordinator were notified.");
+            setTimeout(() => setToast(null), 3200);
+          }
+          const seq = ++msgSeqRef.current;
+          const fresh = await getMessages(conversationId);
+          if (fresh.ok && seq === msgSeqRef.current) {
+            setMessages(fresh.messages);
+            setOtherReadAt(fresh.otherLastReadAt ?? null);
+            setOtherOnline(fresh.otherOnline ?? false);
+          }
+          return { ok: true };
         }
-        return { ok: true };
+        setMessages((m) => m.filter((x) => x.id !== optimistic.id));
+        setToast(res.error && res.error.length > 12 ? res.error : "Message didn't send — please try again.");
+        setTimeout(() => setToast(null), 3200);
+        return { ok: false };
+      } finally {
+        sendingRef.current = Math.max(0, sendingRef.current - 1);
       }
-      setMessages((m) => m.filter((x) => x.id !== optimistic.id));
-      setToast(res.error && res.error.length > 12 ? res.error : "Message didn't send — please try again.");
-      setTimeout(() => setToast(null), 3200);
-      return { ok: false };
     },
     [conversationId],
   );
@@ -253,7 +282,8 @@ export function CommunityChat({
       {liveHuddle && !huddle && (
         <button
           onClick={() => openHuddle(liveHuddle.mode === "video" ? "video" : "voice")}
-          className="relative z-10 flex items-center gap-2.5 border-b border-[var(--color-green)]/30 bg-[var(--color-green)]/10 px-4 py-2.5 text-left transition hover:bg-[var(--color-green)]/15"
+          disabled={joining}
+          className="relative z-10 flex items-center gap-2.5 border-b border-[var(--color-green)]/30 bg-[var(--color-green)]/10 px-4 py-2.5 text-left transition hover:bg-[var(--color-green)]/15 disabled:opacity-70"
         >
           <span className="relative grid size-8 shrink-0 place-items-center rounded-full bg-[var(--color-green)] text-white">
             <Radio className="h-4 w-4" />
@@ -267,8 +297,9 @@ export function CommunityChat({
               {liveHuddle.count} member{liveHuddle.count === 1 ? "" : "s"} in the room · tap to join
             </span>
           </span>
-          <span className="shrink-0 rounded-full bg-[var(--color-green)] px-4 py-1.5 text-xs font-bold text-white">
-            Join
+          <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--color-green)] px-4 py-1.5 text-xs font-bold text-white">
+            {joining ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {joining ? "Joining…" : "Join"}
           </span>
         </button>
       )}
@@ -296,8 +327,21 @@ export function CommunityChat({
                 </div>
               );
             }
+            if (m.media?.kind === "call") {
+              const callMedia = m.media;
+              return (
+                <CallEventRow
+                  key={m.id}
+                  media={callMedia}
+                  mine={m.mine}
+                  at={m.at}
+                  onCallBack={() => openHuddle(callMedia.callMode ?? "voice")}
+                />
+              );
+            }
             const prev = messages[i - 1];
-            const grouped = !!prev && prev.senderId === m.senderId && prev.media?.kind !== "system";
+            const grouped =
+              !!prev && prev.senderId === m.senderId && prev.media?.kind !== "system" && prev.media?.kind !== "call";
             const read = !!otherReadAt && m.at <= otherReadAt;
             return (
               <div key={m.id} className={`flex items-end gap-2 ${m.mine ? "justify-end" : "justify-start"} ${grouped ? "mt-0.5" : "mt-2"}`}>
@@ -326,8 +370,12 @@ export function CommunityChat({
                     {m.mine &&
                       (m.id.startsWith("tmp-") ? (
                         <Check className="h-3.5 w-3.5" />
+                      ) : read ? (
+                        <CheckCheck className="h-3.5 w-3.5 text-[#0ea5e9]" />
+                      ) : otherOnline ? (
+                        <CheckCheck className="h-3.5 w-3.5" />
                       ) : (
-                        <CheckCheck className={`h-3.5 w-3.5 ${read ? "text-[#0ea5e9]" : ""}`} />
+                        <Check className="h-3.5 w-3.5" />
                       ))}
                   </span>
                 </div>

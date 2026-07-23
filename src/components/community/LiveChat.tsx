@@ -18,8 +18,6 @@ import {
   MessageSquarePlus,
   UserPlus,
   Users,
-  PhoneMissed,
-  PhoneOff,
   Flag,
   ShieldAlert,
 } from "lucide-react";
@@ -39,7 +37,7 @@ import { reportMember, type ReportCategory } from "@/app/actions/reports";
 import type { CallEligibility } from "@/lib/demo-store";
 import type { StartCallDetail } from "@/components/call/CallCenter";
 import { Avatar } from "./Avatar";
-import { AudioNote, Composer, FileCard, ImageMedia, clock, colorFor, fmtTime } from "./chat-shared";
+import { AudioNote, CallEventRow, Composer, FileCard, ImageMedia, clock, colorFor, fmtTime } from "./chat-shared";
 
 function dayLabel(iso: string | null) {
   if (!iso) return "";
@@ -99,7 +97,7 @@ function ConvoAvatar({ c, size }: { c: ChatConversation; size: number }) {
   );
 }
 
-export function LiveChat() {
+export function LiveChat({ active: isTabActive = true }: { active?: boolean } = {}) {
   const [state, setState] = useState<"loading" | "ready" | "unavailable">("loading");
   const [members, setMembers] = useState<ChatMember[]>([]);
   const [convos, setConvos] = useState<ChatConversation[]>([]);
@@ -111,6 +109,7 @@ export function LiveChat() {
   const [eligibility, setEligibility] = useState<CallEligibility | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [otherReadAt, setOtherReadAt] = useState<string | null>(null);
+  const [otherOnline, setOtherOnline] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [reporting, setReporting] = useState<{ id: string; name: string } | null>(null);
 
@@ -136,11 +135,35 @@ export function LiveChat() {
     return () => { alive = false; };
   }, []);
 
+  // Every getMessages fetch (whether from opening a thread, the confirm-send
+  // reload, or the background poll) is tagged with a sequence number. A
+  // response only gets applied if no NEWER fetch has been issued since —
+  // otherwise a poll that started just before a send, and resolves just
+  // after, would overwrite the just-sent message with the stale pre-send
+  // list, making it visibly vanish until the next poll tick recovers it.
+  const msgSeqRef = useRef(0);
+  // While a send's own round trip is in flight (including its confirm
+  // reload), the background poll must not touch `messages` at all — even
+  // its NEWEST request can race the insert at the database layer and read
+  // a snapshot from just before the send committed, which the sequence
+  // guard above can't catch (that response isn't stale, it's just early).
+  // Blanking this window out entirely is what stops the sent message from
+  // ever flashing away and reappearing.
+  const sendingRef = useRef(0);
+  // Per-conversation cache: once a thread has been fetched this session,
+  // switching back to it shows the cached messages instantly instead of
+  // blanking to empty while the fetch is in flight.
+  const messagesCacheRef = useRef<Map<string, ChatMessageDTO[]>>(new Map());
+
   const loadThread = useCallback(async (cid: string) => {
+    const seq = ++msgSeqRef.current;
     const res = await getMessages(cid);
+    if (seq !== msgSeqRef.current) return; // superseded by a newer fetch
     if (res.ok) {
+      messagesCacheRef.current.set(cid, res.messages);
       setMessages(res.messages);
       setOtherReadAt(res.otherLastReadAt ?? null);
+      setOtherOnline(res.otherOnline ?? false);
       // mark read locally
       setConvos((prev) => prev.map((c) => (c.id === cid ? { ...c, unread: 0 } : c)));
     }
@@ -149,29 +172,44 @@ export function LiveChat() {
   function openConvo(cid: string) {
     setActiveId(cid);
     setShowThread(true);
-    setMessages([]);
-    lastCountRef.current = 0;
+    // Show whatever we already have for this thread instantly (rather than
+    // blanking to empty) — the fetch below reconciles it in the background.
+    const cached = messagesCacheRef.current.get(cid) ?? [];
+    setMessages(cached);
+    lastCountRef.current = cached.length;
     loadThread(cid);
   }
 
   /* --- poll active thread + conversation list (near real-time) --- */
   useEffect(() => {
-    if (state !== "ready") return;
+    // Paused while another tab is active — this component stays mounted
+    // (so switching back is instant) but its background poll stands down;
+    // reactivating fires the tick immediately below so the view is never stale.
+    if (state !== "ready" || !isTabActive) return;
+    let alive = true;
     let inFlight = false; // skip a tick rather than let slow polls pile up
-    const t = setInterval(async () => {
+    const tick = async () => {
       if (inFlight) return;
       inFlight = true;
       // A failed poll (network blip, server hiccup) keeps the current view;
       // the next tick recovers. Both requests run in parallel — they don't
       // depend on each other.
+      const seq = ++msgSeqRef.current;
       try {
         const [msgRes, list] = await Promise.all([
           activeId ? getMessages(activeId) : Promise.resolve(null),
           refreshConversations(),
         ]);
-        if (msgRes?.ok) {
+        if (!alive) return;
+        // Drop this response if a newer fetch (e.g. the confirm-send reload)
+        // has been issued since, OR if a send is currently mid-flight — a
+        // send's own request already owns reconciling `messages` for that
+        // window (see sendingRef above).
+        if (msgRes?.ok && seq === msgSeqRef.current && sendingRef.current === 0) {
+          if (activeId) messagesCacheRef.current.set(activeId, msgRes.messages);
           setMessages(msgRes.messages);
           setOtherReadAt(msgRes.otherLastReadAt ?? null);
+          setOtherOnline(msgRes.otherOnline ?? false);
         }
         // keep unread at 0 for the conversation we're viewing
         if (list) setConvos(list.map((c) => (c.id === activeId ? { ...c, unread: 0 } : c)));
@@ -180,9 +218,11 @@ export function LiveChat() {
       } finally {
         inFlight = false;
       }
-    }, 2500);
-    return () => clearInterval(t);
-  }, [state, activeId]);
+    };
+    tick();
+    const t = setInterval(tick, 200); // tightened again — as fast as this architecture allows
+    return () => { alive = false; clearInterval(t); };
+  }, [state, activeId, isTabActive]);
 
   /* --- auto-scroll on new messages --- */
   useEffect(() => {
@@ -220,25 +260,30 @@ export function LiveChat() {
         at: new Date().toISOString(),
       };
       setMessages((m) => [...m, optimistic]);
-      let res: Awaited<ReturnType<typeof sendMessage>>;
+      sendingRef.current++;
       try {
-        res = await sendMessage(activeId, body, media ?? null);
-      } catch {
-        res = { ok: false, error: "Couldn't reach the server — check your connection and try again." };
-      }
-      if (res.ok) {
-        if (res.flagged) {
-          flashToast("⚠️ Flagged for review — your Ward Captain & LGA Coordinator were notified.");
+        let res: Awaited<ReturnType<typeof sendMessage>>;
+        try {
+          res = await sendMessage(activeId, body, media ?? null);
+        } catch {
+          res = { ok: false, error: "Couldn't reach the server — check your connection and try again." };
         }
-        await loadThread(activeId);
-        const list = await refreshConversations();
-        if (list) setConvos(list.map((c) => (c.id === activeId ? { ...c, unread: 0 } : c)));
-        return { ok: true };
+        if (res.ok) {
+          if (res.flagged) {
+            flashToast("⚠️ Flagged for review — your Ward Captain & LGA Coordinator were notified.");
+          }
+          await loadThread(activeId);
+          const list = await refreshConversations();
+          if (list) setConvos(list.map((c) => (c.id === activeId ? { ...c, unread: 0 } : c)));
+          return { ok: true };
+        }
+        // Roll back the optimistic bubble.
+        setMessages((m) => m.filter((x) => x.id !== optimistic.id));
+        flashToast(res.error && res.error.length > 12 ? res.error : "Message didn't send — please try again.");
+        return { ok: false };
+      } finally {
+        sendingRef.current = Math.max(0, sendingRef.current - 1);
       }
-      // Roll back the optimistic bubble.
-      setMessages((m) => m.filter((x) => x.id !== optimistic.id));
-      flashToast(res.error && res.error.length > 12 ? res.error : "Message didn't send — please try again.");
-      return { ok: false };
     },
     [activeId, loadThread],
   );
@@ -538,7 +583,8 @@ export function LiveChat() {
                     const prev = messages[i - 1];
                     const grouped =
                       !!prev && prev.senderId === m.senderId && !prev.media?.callStatus && prev.media?.kind !== "system";
-                    // ticks: ✓ sending · ✓✓ delivered · blue ✓✓ read
+                    // ticks: single ✓ sent (recipient offline) · double ✓✓ delivered
+                    // (recipient online, unread) · blue ✓✓ read
                     const read = !!otherReadAt && m.at <= otherReadAt;
                     return (
                       <div key={m.id} className={`flex items-end gap-2 ${m.mine ? "justify-end" : "justify-start"} ${grouped ? "mt-0.5" : "mt-2"}`}>
@@ -562,8 +608,12 @@ export function LiveChat() {
                             {m.mine &&
                               (m.id.startsWith("tmp-") ? (
                                 <Check className="h-3.5 w-3.5" />
+                              ) : read ? (
+                                <CheckCheck className="h-3.5 w-3.5 text-[#0ea5e9]" />
+                              ) : otherOnline ? (
+                                <CheckCheck className="h-3.5 w-3.5" />
                               ) : (
-                                <CheckCheck className={`h-3.5 w-3.5 ${read ? "text-[#0ea5e9]" : ""}`} />
+                                <Check className="h-3.5 w-3.5" />
                               ))}
                           </span>
                         </div>
@@ -770,64 +820,3 @@ function MemberPicker({
   );
 }
 
-/* ------------------------------ call events ------------------------------ */
-
-/** An entry in the thread's call log — missed / declined / completed call.
- *  Tapping it calls the member back in the same mode. */
-function CallEventRow({
-  media,
-  mine,
-  at,
-  onCallBack,
-}: {
-  media: ChatMedia;
-  mine: boolean;
-  at: string;
-  onCallBack: () => void;
-}) {
-  const video = media.callMode === "video";
-  const missed = media.callStatus === "missed";
-  const declined = media.callStatus === "declined";
-  const label =
-    media.callStatus === "completed"
-      ? `${video ? "Video" : "Voice"} call`
-      : missed
-        ? mine
-          ? "No answer"
-          : `Missed ${video ? "video" : "voice"} call`
-        : mine
-          ? "Call declined"
-          : `Declined ${video ? "video" : "voice"} call`;
-  const Icon = missed ? PhoneMissed : declined ? PhoneOff : video ? Video : Phone;
-  const alert = missed && !mine; // the callee's missed call is the loud one
-  return (
-    <div className={`mt-2 flex ${mine ? "justify-end" : "justify-start"}`}>
-      <button
-        onClick={onCallBack}
-        title="Call back"
-        className={`flex items-center gap-2.5 rounded-2xl px-3 py-2 text-left shadow-sm transition hover:brightness-95 ${
-          mine ? "rounded-br-md bg-[var(--color-brand-tint)]" : "rounded-bl-md bg-white"
-        }`}
-      >
-        <span
-          className={`grid size-8 shrink-0 place-items-center rounded-full ${
-            alert
-              ? "bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
-              : "bg-[var(--color-surface-2)] text-[var(--color-ink-soft)]"
-          }`}
-        >
-          <Icon className="h-4 w-4" />
-        </span>
-        <span className="flex flex-col items-start leading-tight">
-          <span className={`text-[13.5px] font-semibold ${alert ? "text-[var(--color-danger)]" : "text-[var(--color-ink)]"}`}>
-            {label}
-          </span>
-          <span className="text-[11px] text-[var(--color-faint)]">
-            {media.callStatus === "completed" && media.duration ? `${fmtTime(media.duration)} · ` : ""}
-            {clock(at)} · tap to call back
-          </span>
-        </span>
-      </button>
-    </div>
-  );
-}

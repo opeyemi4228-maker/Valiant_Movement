@@ -45,6 +45,7 @@ interface PeerLink {
   appliedOffer: string;
   appliedAnswer: string;
   iceIdx: number;
+  restarting: boolean; // an ICE-restart offer is in flight for this pair
 }
 
 function fmtDuration(s: number) {
@@ -76,11 +77,19 @@ export function HuddleRoom({
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(isVideo);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  /** True once the camera/mic are actually open (only after someone joins). */
+  const [mediaLive, setMediaLive] = useState(false);
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const linksRef = useRef<Map<string, PeerLink>>(new Map());
   const closedRef = useRef(false);
+  const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirror the toggles so media acquired later starts in the chosen state.
+  const micOnRef = useRef(true);
+  const camOnRef = useRef(isVideo);
+  useEffect(() => { micOnRef.current = micOn; }, [micOn]);
+  useEffect(() => { camOnRef.current = camOn; }, [camOn]);
 
   /* ---- timer ---- */
   useEffect(() => {
@@ -93,6 +102,14 @@ export function HuddleRoom({
     let alive = true;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     const links = linksRef.current; // stable Map for this room's lifetime
+
+    // Cancel any deferred "leave" from a just-prior cleanup (see below) —
+    // this is the remount half of React's dev-only mount→cleanup→remount
+    // cycle (Strict Mode), not a real return to the room.
+    if (leaveTimerRef.current) {
+      clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
+    }
 
     const teardownPeer = (id: string) => {
       const link = links.get(id);
@@ -124,41 +141,96 @@ export function HuddleRoom({
           return next;
         });
       };
-      link = { pc, offered: false, appliedOffer: "", appliedAnswer: "", iceIdx: 0 };
+      // Self-heal a dropped pairwise link (WiFi↔cellular switch, brief NAT
+      // rebind, transient packet loss) — without this, a peer whose
+      // connection blips just freezes forever, which reads as "the call
+      // keeps dropping" even though the huddle itself is still live.
+      pc.onconnectionstatechange = () => {
+        if (!alive) return;
+        const st = pc.connectionState;
+        if (st !== "failed" && st !== "disconnected") return;
+        const l = links.get(peerId);
+        if (!l || l.restarting) return;
+        const iAmOffer = meId < peerId;
+        if (!iAmOffer) return; // the offer side drives recovery; the answer side just re-answers the new offer
+        l.restarting = true;
+        (async () => {
+          try {
+            const offer = await pc.createOffer({ iceRestart: true });
+            await pc.setLocalDescription(offer);
+            await sendHuddleSdp(huddleId, peerId, "offer", JSON.stringify(offer));
+          } catch { /* connection stays in "failed" — retried on the next state change */ } finally {
+            l.restarting = false;
+          }
+        })();
+      };
+      link = { pc, offered: false, appliedOffer: "", appliedAnswer: "", iceIdx: 0, restarting: false };
       links.set(peerId, link);
       return link;
     };
 
     (async () => {
-      try {
-        localStreamRef.current = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
-      } catch {
-        try {
-          localStreamRef.current = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
-          if (alive && isVideo) setMediaError("Camera unavailable — audio only");
-        } catch {
-          if (alive) setMediaError("Microphone unavailable");
-        }
-      }
-      if (!alive) {
-        localStreamRef.current?.getTracks().forEach((t) => t.stop());
-        return;
-      }
-      const local = localStreamRef.current;
-      if (local && localVideoRef.current && local.getVideoTracks().length) {
-        localVideoRef.current.srcObject = local;
-      }
-      if (isVideo && (!local || local.getVideoTracks().length === 0)) setCamOn(false);
+      // Camera/mic are acquired LAZILY — there's no reason to film an empty
+      // room, so nothing opens while you're waiting alone. The moment the
+      // first other member appears we acquire media, and because a peer's
+      // RTCPeerConnection is only created after this resolves, the tracks
+      // attach on the first offer (no renegotiation needed).
+      let mediaPending: Promise<void> | null = null;
+      const acquireMedia = (): Promise<void> => {
+        if (mediaPending) return mediaPending;
+        mediaPending = (async () => {
+          try {
+            localStreamRef.current = await navigator.mediaDevices.getUserMedia({ video: isVideo, audio: true });
+          } catch {
+            try {
+              localStreamRef.current = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+              if (alive && isVideo) setMediaError("Camera unavailable — audio only");
+            } catch {
+              if (alive) setMediaError("Microphone unavailable");
+            }
+          }
+          const local = localStreamRef.current;
+          if (!alive) {
+            local?.getTracks().forEach((t) => t.stop());
+            localStreamRef.current = null;
+            return;
+          }
+          if (local && localVideoRef.current && local.getVideoTracks().length) {
+            localVideoRef.current.srcObject = local;
+          }
+          // Honour any mute/camera-off chosen while waiting alone.
+          local?.getAudioTracks().forEach((t) => (t.enabled = micOnRef.current));
+          local?.getVideoTracks().forEach((t) => (t.enabled = camOnRef.current));
+          if (isVideo && (!local || local.getVideoTracks().length === 0)) setCamOn(false);
+          if (alive) setMediaLive(!!local);
+        })();
+        return mediaPending;
+      };
 
+      let endedStreak = 0;
       const pollOnce = async () => {
         if (!alive) return;
         const res = await pollCommunityHuddle(huddleId);
         if (!alive) return;
+        // Only close on a *sustained* "ended" — a single blip (a hiccup
+        // reading the session, a momentary DB error) must never drop a live
+        // huddle out from under everyone.
         if (res.ended) {
-          onClose();
+          if (++endedStreak >= 3) {
+            onClose();
+            return;
+          }
+          if (alive) pollTimer = setTimeout(pollOnce, 300);
           return;
         }
+        endedStreak = 0;
         setPeers(res.peers);
+
+        // Someone else is here → now we open the camera/mic.
+        if (res.peers.length > 0 && !localStreamRef.current) {
+          await acquireMedia();
+          if (!alive) return;
+        }
 
         const liveIds = new Set(res.peers.map((p) => p.id));
         for (const id of [...links.keys()]) {
@@ -200,7 +272,7 @@ export function HuddleRoom({
             }
           } catch { /* transient signaling error — next poll retries */ }
         }
-        if (alive) pollTimer = setTimeout(pollOnce, 1200);
+        if (alive) pollTimer = setTimeout(pollOnce, 200);
       };
       pollOnce();
     })();
@@ -211,10 +283,23 @@ export function HuddleRoom({
       for (const id of [...links.keys()]) teardownPeer(id);
       localStreamRef.current?.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
-      if (!closedRef.current) {
-        closedRef.current = true;
-        leaveCommunityHuddle(huddleId).catch(() => {});
-      }
+      // Defer the actual "I'm leaving" server call — React's development
+      // Strict Mode mounts every effect, cleans it up, then remounts it
+      // once, purely to surface exactly this kind of bug (a cleanup that
+      // isn't safe to run on a phantom unmount). A REAL unmount has no
+      // matching remount, so the deferred call below still fires; the
+      // Strict Mode remount cancels it (see the cancellation at the top of
+      // this effect) before it ever reaches the server. Without this, a
+      // solo huddle starter's room was being ended within moments of
+      // opening it, every single time, in development.
+      if (leaveTimerRef.current) clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = setTimeout(() => {
+        leaveTimerRef.current = null;
+        if (!closedRef.current) {
+          closedRef.current = true;
+          leaveCommunityHuddle(huddleId).catch(() => {});
+        }
+      }, 400);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [huddleId, meId, isVideo]);
@@ -230,6 +315,7 @@ export function HuddleRoom({
     localStreamRef.current?.getVideoTracks().forEach((t) => (t.enabled = next));
   }
   function leave() {
+    if (leaveTimerRef.current) { clearTimeout(leaveTimerRef.current); leaveTimerRef.current = null; }
     closedRef.current = true;
     leaveCommunityHuddle(huddleId).catch(() => {});
     onClose();
@@ -272,11 +358,18 @@ export function HuddleRoom({
               autoPlay
               muted
               playsInline
-              className={`size-full -scale-x-100 object-cover ${isVideo && camOn && !mediaError ? "" : "hidden"}`}
+              className={`size-full -scale-x-100 object-cover ${isVideo && camOn && mediaLive && !mediaError ? "" : "hidden"}`}
             />
-            {(!isVideo || !camOn || mediaError) && (
-              <div className="grid size-16 place-items-center rounded-full bg-[var(--color-brand)] text-xl font-bold">
-                You
+            {(!isVideo || !camOn || !mediaLive || mediaError) && (
+              <div className="text-center">
+                <div className="mx-auto grid size-16 place-items-center rounded-full bg-[var(--color-brand)] text-xl font-bold">
+                  You
+                </div>
+                {!mediaLive && !mediaError && (
+                  <p className="mt-3 text-xs text-white/50">
+                    {isVideo ? "Camera starts when someone joins" : "Mic starts when someone joins"}
+                  </p>
+                )}
               </div>
             )}
             <span className="absolute bottom-2 left-2 flex items-center gap-1.5 rounded-lg bg-black/50 px-2 py-0.5 text-xs font-semibold backdrop-blur">
