@@ -2,6 +2,7 @@
 
 import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb } from "@/lib/env";
+import { withRetry } from "@/lib/retry";
 import { notify, hasRecentNotif } from "@/lib/notify";
 import { deductDues, getBalance } from "@/lib/wallet-db";
 import { fmtNaira } from "@/lib/wallet-types";
@@ -86,11 +87,18 @@ export async function ensureDuesNotifications(): Promise<void> {
   }
 }
 
-export async function getDuesStatus(): Promise<{ due: string; amount: number; balance: number }> {
+/** Polled every ~1.5s. Returns `null` on a transient failure so the client
+ *  keeps its last-known state instead of flashing a zeroed balance. */
+export async function getDuesStatus(): Promise<{ due: string; amount: number; balance: number } | null> {
   const u = await getCurrentUserSafe();
   const now = new Date();
   let due = new Date(now.getFullYear(), now.getMonth(), DUE_DAY);
   if (now.getDate() > DUE_DAY) due = new Date(now.getFullYear(), now.getMonth() + 1, DUE_DAY);
-  const balance = u && usesDb(u.id) ? await getBalance(u.id) : 0;
-  return { due: due.toISOString(), amount: DUES_NAIRA, balance };
+  try {
+    const balance = u && usesDb(u.id) ? await withRetry(() => getBalance(u.id)) : 0;
+    return { due: due.toISOString(), amount: DUES_NAIRA, balance };
+  } catch (err) {
+    console.error("getDuesStatus failed (returning null so the client keeps its last-known state):", err);
+    return null;
+  }
 }

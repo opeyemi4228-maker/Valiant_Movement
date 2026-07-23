@@ -27,25 +27,31 @@ async function me(): Promise<{ id: string; name: string; avatar: string | null }
   return { id: u.id, name: u.fullName ?? "Member", avatar: u.avatarUrl };
 }
 
-export async function loadFeed(): Promise<{ available: boolean; posts: FeedPost[] }> {
+/** Returns `null` on a transient failure (retries exhausted) so a caller
+ *  that's polling keeps its last-known posts instead of flashing empty. */
+export async function loadFeed(): Promise<{ available: boolean; posts: FeedPost[] } | null> {
   const u = await me();
   if (!u) return { available: false, posts: [] };
   if (!usesDb(u.id)) return { available: true, posts: mem.listPosts(u.id) };
   try {
     return { available: true, posts: await withRetry(() => fdb.listPosts(u.id)) };
   } catch (err) {
-    console.error("loadFeed failed:", err);
-    return { available: false, posts: [] };
+    console.error("loadFeed failed (returning null so the caller keeps its last-known state):", err);
+    return null;
   }
 }
 
 /**
  * Posts + stories in one round trip. The Home tab needs both on every
- * mount and every ~2.5s poll; calling them as two separate server actions
+ * mount and every ~300ms poll; calling them as two separate server actions
  * meant two independent session look-ups and two client↔server hops for
  * data that always travels together — this is the single request instead.
+ *
+ * Returns `null` on a transient failure (retries exhausted) so the client
+ * keeps its last-known feed on screen instead of flashing it empty — the
+ * next poll tick recovers.
  */
-export async function loadFeedBundle(): Promise<{ available: boolean; posts: FeedPost[]; stories: StoryDTO[] }> {
+export async function loadFeedBundle(): Promise<{ available: boolean; posts: FeedPost[]; stories: StoryDTO[] } | null> {
   const u = await me();
   if (!u) return { available: false, posts: [], stories: [] };
   if (!usesDb(u.id)) return { available: true, posts: mem.listPosts(u.id), stories: [] };
@@ -53,8 +59,8 @@ export async function loadFeedBundle(): Promise<{ available: boolean; posts: Fee
     const [posts, stories] = await withRetry(() => Promise.all([fdb.listPosts(u.id), fdb.listStories(u.id)]));
     return { available: true, posts, stories };
   } catch (err) {
-    console.error("loadFeedBundle failed:", err);
-    return { available: false, posts: [], stories: [] };
+    console.error("loadFeedBundle failed (returning null so the client keeps its last-known state):", err);
+    return null;
   }
 }
 
@@ -137,11 +143,19 @@ export async function bookmarkPost(postId: string): Promise<{ ok: boolean; bookm
   return post ? { ok: true, bookmarked: post.bookmarked, post } : { ok: false };
 }
 
-export async function loadBookmarks(): Promise<{ available: boolean; posts: FeedPost[] }> {
+/** Polled every ~1.5s. Returns `null` on a transient failure (retries
+ *  exhausted) so the client keeps its last-known list instead of flashing
+ *  it empty — the next poll tick recovers. */
+export async function loadBookmarks(): Promise<{ available: boolean; posts: FeedPost[] } | null> {
   const u = await me();
   if (!u) return { available: false, posts: [] };
-  const posts = usesDb(u.id) ? await fdb.listBookmarks(u.id) : mem.listBookmarks(u.id);
-  return { available: true, posts };
+  if (!usesDb(u.id)) return { available: true, posts: mem.listBookmarks(u.id) };
+  try {
+    return { available: true, posts: await withRetry(() => fdb.listBookmarks(u.id)) };
+  } catch (err) {
+    console.error("loadBookmarks failed (returning null so the client keeps its last-known state):", err);
+    return null;
+  }
 }
 
 export async function commentPost(postId: string, text: string): Promise<{ ok: boolean; post?: FeedPost }> {

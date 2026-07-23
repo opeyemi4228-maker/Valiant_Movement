@@ -85,8 +85,11 @@ export function Notifications({
       if (inFlight) return;
       inFlight = true;
       try {
+        // `null` means every server-side retry was exhausted — keep the
+        // current list on screen instead of flashing it empty; the next
+        // poll tick recovers.
         const res = await getNotifications();
-        if (alive) { setItems(res.items); setLoaded(true); }
+        if (alive && res) { setItems(res.items); setLoaded(true); }
       } catch {
         /* transient — the next poll recovers */
       } finally {
@@ -97,7 +100,7 @@ export function Notifications({
     // Opening the tab marks them read a moment later, so the nav badge clears
     // (the "new" highlight stays for this view until the next refresh).
     const mark = setTimeout(() => { markNotificationsRead().catch(() => {}); }, 1200);
-    const poll = setInterval(load, 5000);
+    const poll = setInterval(load, 1500); // tightened — matches the rest of the app's real-time feel
     return () => { alive = false; clearTimeout(mark); clearInterval(poll); };
   }, [bookmarks, active]);
 

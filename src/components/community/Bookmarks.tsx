@@ -16,9 +16,13 @@ export function Bookmarks({ me, active = true }: { me: { name: string; avatar?: 
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
+    // `null` means every server-side retry was exhausted — keep the current
+    // list on screen instead of flashing it empty; the next poll recovers.
     const res = await loadBookmarks();
-    setPosts(res.posts);
-    setLoaded(true);
+    if (res) {
+      setPosts(res.posts);
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -27,7 +31,7 @@ export function Bookmarks({ me, active = true }: { me: { name: string; avatar?: 
     // reactivating re-fires immediately below so the list is never stale.
     if (!active) return;
     const kick = setTimeout(refresh, 0);
-    const t = setInterval(refresh, 5000);
+    const t = setInterval(refresh, 1500); // tightened — matches the rest of the app's real-time feel
     return () => { clearTimeout(kick); clearInterval(t); };
   }, [refresh, active]);
 

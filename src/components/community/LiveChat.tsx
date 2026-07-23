@@ -122,16 +122,34 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
   /* --- initial load --- */
   useEffect(() => {
     let alive = true;
-    loadChat().then((res) => {
-      if (!alive) return;
-      if (!res.available) {
-        setState("unavailable");
-        return;
-      }
-      setMembers(res.members);
-      setConvos(res.conversations);
-      setState("ready");
-    });
+    // Retries on top of the server's own retry: loadChat() can still come
+    // back with error:true (every server-side attempt exhausted, e.g. a
+    // slow Neon cold start), or the request itself can fail to reach the
+    // server at all (no .catch() previously — a rejected promise here left
+    // `state` stuck on "loading" forever, since nothing else ever flips it).
+    // This keeps trying with backoff instead of hanging the whole tab.
+    const attempt = (n: number) => {
+      loadChat()
+        .then((res) => {
+          if (!alive) return;
+          if (res.error && n < 6) {
+            setTimeout(() => { if (alive) attempt(n + 1); }, Math.min(800 * (n + 1), 4000));
+            return;
+          }
+          if (!res.available) {
+            setState("unavailable");
+            return;
+          }
+          setMembers(res.members);
+          setConvos(res.conversations);
+          setState("ready");
+        })
+        .catch(() => {
+          if (!alive) return;
+          if (n < 6) setTimeout(() => { if (alive) attempt(n + 1); }, Math.min(800 * (n + 1), 4000));
+        });
+    };
+    attempt(0);
     return () => { alive = false; };
   }, []);
 

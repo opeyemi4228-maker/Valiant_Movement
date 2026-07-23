@@ -14,6 +14,13 @@ function getCtx(): AudioContext | null {
   return ctx;
 }
 
+/** Best-effort haptic buzz — no-op where unsupported (desktop, iOS Safari). */
+function buzz(pattern: number | number[]) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+    try { navigator.vibrate(pattern); } catch { /* ignore */ }
+  }
+}
+
 function beep(c: AudioContext, freq: number, startIn: number, dur: number, gain = 0.14, type: OscillatorType = "sine") {
   const o = c.createOscillator();
   const g = c.createGain();
@@ -23,21 +30,27 @@ function beep(c: AudioContext, freq: number, startIn: number, dur: number, gain 
   g.connect(c.destination);
   const t = c.currentTime + startIn;
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(gain, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(gain, t + 0.015);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   o.start(t);
   o.stop(t + dur + 0.03);
 }
 
-/** Soft two-note chime for a new message. */
+/** Bright three-note chime for a new message/notification — sharper attack
+ *  and louder than before so it actually cuts through and gets noticed,
+ *  plus a short buzz on devices that support it. */
 export function playDing() {
   const c = getCtx();
   if (!c) return;
-  beep(c, 880, 0, 0.12, 0.1);
-  beep(c, 1244, 0.11, 0.18, 0.09);
+  beep(c, 988, 0, 0.11, 0.2, "triangle");
+  beep(c, 1319, 0.1, 0.14, 0.19, "triangle");
+  beep(c, 1568, 0.22, 0.16, 0.16, "triangle");
+  buzz(60);
 }
 
-/** A looping ringer. `incoming` is a warm double-tone; `outgoing` a calmer ringback. */
+/** A looping ringer. `incoming` is a driving double-pulse ring — like an
+ *  actual phone call, not a chime — loud and hard to miss or mistake for a
+ *  passive notification. `outgoing` stays a calmer ringback tone. */
 export class Ringer {
   private timer: ReturnType<typeof setInterval> | null = null;
 
@@ -49,15 +62,21 @@ export class Ringer {
       const cc = getCtx();
       if (!cc) return;
       if (kind === "incoming") {
-        beep(cc, 523, 0, 0.28, 0.13, "triangle");
-        beep(cc, 660, 0.3, 0.34, 0.13, "triangle");
+        // Two quick alternating bursts per cycle ("ring-ring… ring-ring…"),
+        // full volume, square-edged for cut-through presence — paired with
+        // a matching vibration pattern so it's commanding on mobile too.
+        beep(cc, 950, 0, 0.18, 0.32, "square");
+        beep(cc, 760, 0.2, 0.18, 0.32, "square");
+        beep(cc, 950, 0.44, 0.18, 0.32, "square");
+        beep(cc, 760, 0.64, 0.18, 0.32, "square");
+        buzz([260, 130, 260, 130, 260]);
       } else {
-        beep(cc, 440, 0, 0.4, 0.08);
-        beep(cc, 480, 0.42, 0.4, 0.07);
+        beep(cc, 440, 0, 0.4, 0.09);
+        beep(cc, 480, 0.42, 0.4, 0.08);
       }
     };
     ring();
-    this.timer = setInterval(ring, kind === "incoming" ? 2200 : 3200);
+    this.timer = setInterval(ring, kind === "incoming" ? 1500 : 3200);
   }
 
   stop() {

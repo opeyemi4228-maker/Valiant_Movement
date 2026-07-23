@@ -83,6 +83,10 @@ export async function loadChat(): Promise<{
   available: boolean;
   conversations: ChatConversation[];
   members: ChatMember[];
+  /** Set only when every retry was exhausted — distinct from a genuinely
+   *  empty account, so the client knows to retry rather than show "no
+   *  conversations yet". */
+  error?: boolean;
 }> {
   const id = await meId();
   if (!id) return { available: false, conversations: [], members: [] };
@@ -94,34 +98,52 @@ export async function loadChat(): Promise<{
   // other — fetch them concurrently instead of back-to-back. Each Neon HTTP
   // round trip has real fixed latency, so this alone roughly halves the
   // wait on opening the Messages tab.
-  const [memberRows, conversations] = await Promise.all([
-    withRetry(() =>
-      db
-        .select({
-          id: users.id,
-          email: users.email,
-          name: profiles.fullName,
-          username: profiles.username,
-          avatar: profiles.avatarUrl,
-        })
-        .from(users)
-        .leftJoin(profiles, eq(profiles.userId, users.id))
-        .where(ne(users.id, id))
-        .orderBy(asc(profiles.fullName))
-        .limit(200),
-    ),
-    getConversationsFor(id),
-  ]);
+  //
+  // The whole thing is retried as one unit (a Neon cold start can transiently
+  // fail either query) and never allowed to throw. Without this, a rejected
+  // promise here left the client's un-caught `.then()` stuck on "loading"
+  // forever — the ongoing poll (refreshConversations, below) already had
+  // this same retry+catch resilience; this was the one gap where the very
+  // FIRST load of the tab had none, so a single bad round trip could hang
+  // the whole screen until a manual reload happened to land after the DB
+  // had woken back up.
+  try {
+    const [memberRows, conversations] = await withRetry(() =>
+      Promise.all([
+        db
+          .select({
+            id: users.id,
+            email: users.email,
+            name: profiles.fullName,
+            username: profiles.username,
+            avatar: profiles.avatarUrl,
+          })
+          .from(users)
+          .leftJoin(profiles, eq(profiles.userId, users.id))
+          .where(ne(users.id, id))
+          .orderBy(asc(profiles.fullName))
+          .limit(200),
+        getConversationsFor(id),
+      ]),
+    );
 
-  const members: ChatMember[] = memberRows.map((m) => ({
-    id: m.id,
-    name: fullName({ fullName: m.name }, m.email),
-    username: m.username,
-    email: m.email,
-    avatar: m.avatar,
-  }));
+    const members: ChatMember[] = memberRows.map((m) => ({
+      id: m.id,
+      name: fullName({ fullName: m.name }, m.email),
+      username: m.username,
+      email: m.email,
+      avatar: m.avatar,
+    }));
 
-  return { available: true, conversations, members };
+    return { available: true, conversations, members };
+  } catch (err) {
+    console.error("loadChat failed (returning empty so the client can retry):", err);
+    // `available: true` with an empty list, NOT `false` — the client reads
+    // `available: false` as "this account can't use chat", which is the
+    // wrong message for what's actually a transient failure. The client
+    // retries loadChat itself shortly after (see LiveChat.tsx).
+    return { available: true, conversations: [], members: [], error: true };
+  }
 }
 
 async function getConversationsFor(id: string): Promise<ChatConversation[]> {

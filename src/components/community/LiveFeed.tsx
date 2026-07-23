@@ -126,10 +126,14 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
     if (inFlightRef.current) return inFlightRef.current;
     const p = (async () => {
       try {
+        // `null` means every server-side retry was exhausted — keep the
+        // current feed on screen instead of flashing it empty.
         const res = await loadFeedBundle();
-        setPosts(res.posts);
-        setDbStories(res.stories);
-        setLoaded(true);
+        if (res) {
+          setPosts(res.posts);
+          setDbStories(res.stories);
+          setLoaded(true);
+        }
       } catch {
         /* transient — the next poll recovers */
       } finally {
@@ -146,7 +150,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
     // reactivating re-fires immediately below so the view is never stale.
     if (!active) return;
     const kick = setTimeout(refresh, 0); // after paint — no sync setState in the effect
-    const t = setInterval(refresh, 750); // tightened again — 2x faster
+    const t = setInterval(refresh, 300); // tightened again — matches the rest of the app's real-time feel
     return () => {
       clearTimeout(kick);
       clearInterval(t);
@@ -692,6 +696,11 @@ export function PostCard({
       style={{ borderLeft: `3px solid ${post.authorColor}` }}
     >
       <div className="p-4">
+        {post.reposted && (
+          <div className="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--color-muted)]">
+            <Repeat2 className="h-3.5 w-3.5" /> You reposted
+          </div>
+        )}
         <div className="flex items-start gap-3">
           <Avatar name={post.authorName} color={post.authorColor} photo={post.authorPhoto} size={44} />
           <div className="min-w-0 flex-1">

@@ -30,12 +30,15 @@ import { CallCenter } from "@/components/call/CallCenter";
 
 type Tab = "home" | "communities" | "messages" | "finance" | "notifications" | "bookmarks" | "profile";
 
+// Badges for communities/messages/notifications are real, live unread
+// counts (see valiant:communities-unread / valiant:messages-unread /
+// valiant:notif-unread below) — never hardcode a placeholder number here.
 const NAV: { id: Tab; label: string; icon: typeof Home; badge?: number }[] = [
   { id: "home", label: "Home", icon: Home },
-  { id: "communities", label: "Communities", icon: Users, badge: 17 },
-  { id: "messages", label: "Messages", icon: MessageCircle, badge: 11 },
+  { id: "communities", label: "Communities", icon: Users },
+  { id: "messages", label: "Messages", icon: MessageCircle },
   { id: "finance", label: "Finance", icon: Wallet },
-  { id: "notifications", label: "Notifications", icon: Bell, badge: 4 },
+  { id: "notifications", label: "Notifications", icon: Bell },
   { id: "bookmarks", label: "Bookmarks", icon: Bookmark },
   { id: "profile", label: "Profile", icon: User },
 ];
@@ -83,17 +86,25 @@ export function MemberShell({
   // no skeleton flash. Only the very first visit to a tab pays that cost.
   const [visited, setVisited] = useState<Set<Tab>>(() => new Set([initialTab]));
   const [notifUnread, setNotifUnread] = useState(0);
+  const [messagesUnread, setMessagesUnread] = useState(0);
+  const [communitiesUnread, setCommunitiesUnread] = useState(0);
   const name = user.fullName ?? "Member";
 
-  // Live notification badge — RealtimePresence broadcasts the unread count;
-  // the toast's "open" action jumps to the notifications tab.
+  // Live nav badges — RealtimePresence broadcasts these unread counts every
+  // poll tick; the toast's "open" action jumps to the notifications tab.
   useEffect(() => {
     const onCount = (e: Event) => setNotifUnread((e as CustomEvent<number>).detail ?? 0);
+    const onMessagesCount = (e: Event) => setMessagesUnread((e as CustomEvent<number>).detail ?? 0);
+    const onCommunitiesCount = (e: Event) => setCommunitiesUnread((e as CustomEvent<number>).detail ?? 0);
     const onOpen = () => go("notifications");
     window.addEventListener("valiant:notif-unread", onCount);
+    window.addEventListener("valiant:messages-unread", onMessagesCount);
+    window.addEventListener("valiant:communities-unread", onCommunitiesCount);
     window.addEventListener("valiant:open-notifications", onOpen);
     return () => {
       window.removeEventListener("valiant:notif-unread", onCount);
+      window.removeEventListener("valiant:messages-unread", onMessagesCount);
+      window.removeEventListener("valiant:communities-unread", onCommunitiesCount);
       window.removeEventListener("valiant:open-notifications", onOpen);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,7 +142,14 @@ export function MemberShell({
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
       {/* ============================ Sidebar (desktop) ============================ */}
       <aside className="hidden w-[88px] shrink-0 flex-col border-r border-[var(--color-line)] bg-white px-2 py-4 lg:flex xl:w-[270px] xl:px-4">
-        <SidebarInner tab={tab} go={go} me={me} notifCount={notifUnread} />
+        <SidebarInner
+          tab={tab}
+          go={go}
+          me={me}
+          notifCount={notifUnread}
+          messagesCount={messagesUnread}
+          communitiesCount={communitiesUnread}
+        />
       </aside>
 
       {/* ================================ Main ================================ */}
@@ -216,9 +234,15 @@ export function MemberShell({
             safe-area padding for iOS home-indicator devices. */}
         <div className="shrink-0 border-t border-[var(--color-line)] bg-white px-3 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] lg:hidden">
           <ExpandableTabs
-            tabs={MOBILE_TABS.map((t, i) =>
-              MOBILE_NAV[i].id === "notifications" ? { ...t, badge: notifUnread || undefined } : t,
-            )}
+            tabs={MOBILE_TABS.map((t, i) => {
+              const id = MOBILE_NAV[i].id;
+              const badge =
+                id === "notifications" ? notifUnread
+                : id === "messages" ? messagesUnread
+                : id === "communities" ? communitiesUnread
+                : t.badge;
+              return { ...t, badge: badge || undefined };
+            })}
             selected={activeMobileIndex >= 0 ? activeMobileIndex : null}
             onChange={onMobileNav}
             activeColor="text-[var(--color-brand-strong)]"
@@ -248,12 +272,16 @@ function SidebarInner({
   go,
   me,
   notifCount = 0,
+  messagesCount = 0,
+  communitiesCount = 0,
   expanded = false,
 }: {
   tab: Tab;
   go: (t: Tab) => void;
   me: { name: string; handle: string; email: string; avatar?: string };
   notifCount?: number;
+  messagesCount?: number;
+  communitiesCount?: number;
   expanded?: boolean;
 }) {
   // `expanded` forces labels (mobile drawer). On desktop labels show at xl.
@@ -280,7 +308,11 @@ function SidebarInner({
         {NAV.map((item) => {
           const active = tab === item.id;
           const Icon = item.icon;
-          const badge = item.id === "notifications" ? notifCount : item.badge;
+          const badge =
+            item.id === "notifications" ? notifCount
+            : item.id === "messages" ? messagesCount
+            : item.id === "communities" ? communitiesCount
+            : item.badge;
           return (
             <button
               key={item.id}

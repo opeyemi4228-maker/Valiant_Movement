@@ -87,7 +87,7 @@ export function Profile({
   const load = useCallback(() => {
     Promise.all([getMyProfile(), loadFeed(), getMyCommunities()]).then(([p, feed, comms]) => {
       if (p) setProfile(p);
-      if (feed.available) setFeedPosts(feed.posts);
+      if (feed?.available) setFeedPosts(feed.posts);
       setMyCommunities(comms.items);
       setCommunitiesNote(comms.available ? null : comms.reason ?? null);
     });
@@ -115,6 +115,15 @@ export function Profile({
     : [];
 
   const myPosts = profile ? feedPosts.filter((p) => p.authorId === profile.id) : [];
+  // Reposts previously never showed up anywhere on the profile — a repost
+  // only ever toggled a flag/counter on the ORIGINAL post, it never
+  // appeared as an entry of its own. The Posts tab is a timeline: your own
+  // posts plus anything you reposted, newest first. (Sorted by the
+  // original post's timestamp — reposts don't carry their own separate
+  // "reposted at" time yet, so a very old post you just reposted won't
+  // jump all the way to the top the way a real repost timestamp would.)
+  const repostedPosts = profile ? feedPosts.filter((p) => p.reposted && p.authorId !== profile.id) : [];
+  const timelinePosts = [...myPosts, ...repostedPosts].sort((a, b) => b.at.localeCompare(a.at));
   const mediaPosts = myPosts.filter((p) => p.image);
   const likedPosts = feedPosts.filter((p) => p.liked);
   const likesReceived = myPosts.reduce((sum, p) => sum + p.likes, 0);
@@ -301,10 +310,12 @@ export function Profile({
 
               <div className="divide-y divide-[var(--color-line)]">
                 {tab === "Posts" &&
-                  (myPosts.length === 0 ? (
+                  (timelinePosts.length === 0 ? (
                     <Empty icon={<MessageCircle className="h-7 w-7" />} text="Your posts will appear here — share your first one from Home." />
                   ) : (
-                    myPosts.map((p) => <ProfilePost key={p.id} post={p} />)
+                    timelinePosts.map((p) => (
+                      <ProfilePost key={p.id} post={p} repostedByMe={p.authorId !== profile?.id} />
+                    ))
                   ))}
 
                 {tab === "Media" &&
@@ -398,9 +409,14 @@ function Impact({ icon, value, label }: { icon: React.ReactNode; value: string; 
   );
 }
 
-function ProfilePost({ post }: { post: FeedPost }) {
+function ProfilePost({ post, repostedByMe = false }: { post: FeedPost; repostedByMe?: boolean }) {
   return (
     <article className="px-4 py-4">
+      {repostedByMe && (
+        <div className="mb-1.5 flex items-center gap-1.5 pl-[54px] text-[12.5px] font-semibold text-[var(--color-muted)]">
+          <Repeat2 className="h-3.5 w-3.5" /> You reposted
+        </div>
+      )}
       <div className="flex items-start gap-3">
         <Avatar name={post.authorName} color={post.authorColor} photo={post.authorPhoto} size={42} />
         <div className="min-w-0 flex-1">

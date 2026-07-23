@@ -1,6 +1,7 @@
 import "server-only";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
+import { withRetry } from "@/lib/retry";
 import {
   communities,
   communityMembers,
@@ -235,37 +236,50 @@ export interface CommunityChatHandle {
   scope: CommunityScope;
 }
 
-/** Seat a community member in the group chat (community members only). */
+/** Seat a community member in the group chat (community members only).
+ *  Never throws — a rejected promise here previously left the client's
+ *  un-caught `.then()` stuck on "joining…" forever with no recovery.
+ *  `transient: true` tells the client to retry rather than show a
+ *  permanent-looking error. */
 export async function openCommunityChatFor(
   userId: string,
   communityId: string,
-): Promise<{ ok: boolean; chat?: CommunityChatHandle; error?: string }> {
-  const [membership] = await db
-    .select({ role: communityMembers.role })
-    .from(communityMembers)
-    .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, userId)))
-    .limit(1);
-  if (!membership) return { ok: false, error: "Only members of this community can join its chat." };
+): Promise<{ ok: boolean; chat?: CommunityChatHandle; error?: string; transient?: boolean }> {
+  try {
+    const [membership] = await withRetry(() =>
+      db
+        .select({ role: communityMembers.role })
+        .from(communityMembers)
+        .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, userId)))
+        .limit(1),
+    );
+    if (!membership) return { ok: false, error: "Only members of this community can join its chat." };
 
-  const conversationId = await ensureCommunityConversation(communityId);
-  if (!conversationId) return { ok: false, error: "Community not found." };
+    const conversationId = await withRetry(() => ensureCommunityConversation(communityId));
+    if (!conversationId) return { ok: false, error: "Community not found." };
 
-  await seatInConversation(conversationId, userId);
+    await withRetry(() => seatInConversation(conversationId, userId));
 
-  const [c] = await db
-    .select({ name: communities.name, memberCount: communities.memberCount, scope: communities.scope })
-    .from(communities)
-    .where(eq(communities.id, communityId))
-    .limit(1);
-  return {
-    ok: true,
-    chat: {
-      conversationId,
-      name: c?.name ?? "Community",
-      memberCount: c?.memberCount ?? 0,
-      scope: (c?.scope as CommunityScope) ?? "interest",
-    },
-  };
+    const [c] = await withRetry(() =>
+      db
+        .select({ name: communities.name, memberCount: communities.memberCount, scope: communities.scope })
+        .from(communities)
+        .where(eq(communities.id, communityId))
+        .limit(1),
+    );
+    return {
+      ok: true,
+      chat: {
+        conversationId,
+        name: c?.name ?? "Community",
+        memberCount: c?.memberCount ?? 0,
+        scope: (c?.scope as CommunityScope) ?? "interest",
+      },
+    };
+  } catch (err) {
+    console.error("openCommunityChatFor failed (returning transient error):", err);
+    return { ok: false, error: "Couldn't reach the server — retrying…", transient: true };
+  }
 }
 
 interface GeoTarget {
@@ -444,6 +458,58 @@ export async function myCommunities(userId: string): Promise<CommunityDTO[]> {
       controlledBy: CONTROLLED_BY[r.scope as CommunityScope],
     }))
     .sort((a, b) => SCOPE_RANK[a.scope] - SCOPE_RANK[b.scope]);
+}
+
+/** Total unread messages across every community group chat this member is
+ *  in — drives the Communities nav badge. Mirrors call-db.ts's `unreadFor`
+ *  (which is DIRECT chats only, by design), just for `type: "group"`. */
+export async function unreadCommunityMessagesFor(userId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(messages)
+    .innerJoin(
+      conversationMembers,
+      and(eq(conversationMembers.conversationId, messages.conversationId), eq(conversationMembers.userId, userId)),
+    )
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .where(
+      and(
+        eq(conversations.type, "group"),
+        ne(messages.senderId, userId),
+        // system events ("X joined") never count as unread
+        sql`(${messages.media}->>'kind') IS DISTINCT FROM 'system'`,
+        or(isNull(conversationMembers.lastReadAt), gt(messages.createdAt, conversationMembers.lastReadAt)),
+      ),
+    );
+  return row?.n ?? 0;
+}
+
+/** Unread count PER community group chat (keyed by community id) — drives
+ *  the per-row badge in the Communities list, same idea as the per-
+ *  conversation unread badge in Messages. Only communities whose chat has
+ *  actually been opened at least once have a `conversationId` at all; ones
+ *  that don't simply have no entry (0 unread), which is correct. */
+export async function unreadByCommunityFor(userId: string): Promise<Record<string, number>> {
+  const rows = await db
+    .select({ communityId: communities.id, n: sql<number>`count(*)::int` })
+    .from(communityMembers)
+    .innerJoin(communities, eq(communities.id, communityMembers.communityId))
+    .innerJoin(messages, eq(messages.conversationId, communities.conversationId))
+    .innerJoin(
+      conversationMembers,
+      and(eq(conversationMembers.conversationId, communities.conversationId), eq(conversationMembers.userId, userId)),
+    )
+    .where(
+      and(
+        eq(communityMembers.userId, userId),
+        ne(messages.senderId, userId),
+        // system events ("X joined") never count as unread
+        sql`(${messages.media}->>'kind') IS DISTINCT FROM 'system'`,
+        or(isNull(conversationMembers.lastReadAt), gt(messages.createdAt, conversationMembers.lastReadAt)),
+      ),
+    )
+    .groupBy(communities.id);
+  return Object.fromEntries(rows.map((r) => [r.communityId, r.n]));
 }
 
 /** Members of a community (for counts and coordinator dashboards). */

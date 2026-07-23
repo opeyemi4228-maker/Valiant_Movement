@@ -35,7 +35,7 @@ export function RealtimePresence() {
         if (!alive) return;
 
         if (presenceRes.status === "fulfilled") {
-          const { unread, incomingCall } = presenceRes.value;
+          const { unread, incomingCall, communitiesUnread } = presenceRes.value;
           if (prevUnread.current >= 0 && unread > prevUnread.current) {
             playDing();
             setToast("New message");
@@ -45,9 +45,16 @@ export function RealtimePresence() {
           // CallCenter listens for this instead of running its own poll —
           // one presence query serves both surfaces.
           window.dispatchEvent(new CustomEvent("valiant:incoming-call", { detail: incomingCall }));
+          // Drives the real Messages/Communities nav badges (MemberShell) —
+          // these used to be hardcoded placeholder numbers.
+          window.dispatchEvent(new CustomEvent("valiant:messages-unread", { detail: unread }));
+          window.dispatchEvent(new CustomEvent("valiant:communities-unread", { detail: communitiesUnread }));
         }
 
-        if (notifRes.status === "fulfilled") {
+        // `null` means every server-side retry was exhausted — skip this
+        // tick entirely and keep the last-known unread count/toast state;
+        // the next poll recovers.
+        if (notifRes.status === "fulfilled" && notifRes.value) {
           const notif = notifRes.value;
           const top = notif.items[0] ?? null;
           if (

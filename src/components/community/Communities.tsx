@@ -16,7 +16,7 @@ import {
   Phone,
   Video,
 } from "lucide-react";
-import { getMyCommunities, getCommunityMembers, type MyCommunitiesResult } from "@/app/actions/communities";
+import { getMyCommunities, getCommunityMembers, getCommunitiesUnread, type MyCommunitiesResult } from "@/app/actions/communities";
 import type { CommunityDTO, CommunityMemberDTO, CommunityScope } from "@/lib/communities";
 import type { StartCallDetail } from "@/components/call/CallCenter";
 import { Avatar } from "./Avatar";
@@ -41,10 +41,59 @@ export function Communities() {
   const [res, setRes] = useState<MyCommunitiesResult | null>(null);
   const [open, setOpen] = useState<CommunityDTO | null>(null);
   const [chat, setChat] = useState<CommunityDTO | null>(null);
+  const [unreadByCommunity, setUnreadByCommunity] = useState<Record<string, number>>({});
+
+  // Per-community unread badge (mirrors the per-conversation badge in
+  // Messages) — polled independently of the one-time community list load.
+  useEffect(() => {
+    let alive = true;
+    let inFlight = false;
+    const tick = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        // `null` means every retry was exhausted — keep the current badges
+        // rather than wiping them to zero; the next tick recovers.
+        const map = await getCommunitiesUnread();
+        if (alive && map) setUnreadByCommunity(map);
+      } finally {
+        inFlight = false;
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1500); // matches the rest of the app's real-time feel
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  // Opening a community marks its chat read server-side (getMessages does
+  // this as a side effect); clear the badge optimistically here too so it
+  // doesn't wait for the next poll tick to disappear.
+  function openChat(c: CommunityDTO) {
+    setChat(c);
+    setUnreadByCommunity((prev) => (prev[c.id] ? { ...prev, [c.id]: 0 } : prev));
+  }
 
   useEffect(() => {
     let alive = true;
-    getMyCommunities().then((r) => { if (alive) setRes(r); });
+    // Retries on top of the server's own retry — a transient failure (or a
+    // rejected promise with no .catch()) previously left this stuck on its
+    // loading spinner forever, since nothing else ever flips it.
+    const attempt = (n: number) => {
+      getMyCommunities()
+        .then((r) => {
+          if (!alive) return;
+          if (r.error && n < 6) {
+            setTimeout(() => { if (alive) attempt(n + 1); }, Math.min(800 * (n + 1), 4000));
+            return;
+          }
+          setRes(r);
+        })
+        .catch(() => {
+          if (!alive) return;
+          if (n < 6) setTimeout(() => { if (alive) attempt(n + 1); }, Math.min(800 * (n + 1), 4000));
+        });
+    };
+    attempt(0);
     return () => { alive = false; };
   }, []);
 
@@ -74,30 +123,19 @@ export function Communities() {
 
   const parent = res.items.find((c) => c.scope === "state") ?? null;
   const groups = res.items.filter((c) => c.scope !== "state");
+  const ordered = [parent, ...groups].filter((c): c is CommunityDTO => !!c);
   const p = res.placement;
 
-  /* ------------------- group chat (WhatsApp-style) ------------------- */
-  if (chat) {
-    return (
-      <>
-        {open && <MembersSheet community={open} onClose={() => setOpen(null)} />}
-        <CommunityChat
-          community={chat}
-          onBack={() => setChat(null)}
-          onShowMembers={() => setOpen(chat)}
-        />
-      </>
-    );
-  }
-
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="flex h-full">
       {open && <MembersSheet community={open} onClose={() => setOpen(null)} />}
 
-      <div className="w-full px-4 py-5 lg:px-8">
-        {/* Header + placement breadcrumb */}
-        <div className="mb-4">
-          <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Your community</h1>
+      {/* ===================== Group list — always on the left, same
+          pattern as Messages, so switching groups never means leaving and
+          re-entering. ===================== */}
+      <div className={`flex h-full w-full shrink-0 flex-col overflow-y-auto border-r border-[var(--color-line)] bg-white md:w-[340px] ${chat ? "hidden md:flex" : "flex"}`}>
+        <div className="border-b border-[var(--color-line)] px-4 py-3.5">
+          <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Communities</h1>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] font-medium text-[var(--color-ink-soft)]">
             <MapPin className="h-3.5 w-3.5 text-[var(--color-brand-strong)]" />
             {[p?.state && `${p.state} State`, p?.lga && `${p.lga} LGA`, p?.ward, p?.pollingUnit]
@@ -109,89 +147,54 @@ export function Communities() {
                 </span>
               ))}
           </div>
-          <p className="mt-2 text-[13px] text-[var(--color-muted)]">
-            You were placed in these automatically when you registered — every verified Valiant near you is here.
-          </p>
         </div>
 
-        {/* State community — the parent (announcement channel) */}
-        {parent && (
-          <ParentCard c={parent} onOpen={() => setChat(parent)} onMembers={() => setOpen(parent)} />
-        )}
+        <div className="min-h-0 flex-1">
+          {ordered.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-[var(--color-muted)]">No communities yet.</p>
+          ) : (
+            ordered.map((c, i) => (
+              <GroupRow
+                key={c.id}
+                c={c}
+                first={i === 0}
+                active={chat?.id === c.id}
+                unread={unreadByCommunity[c.id] ?? 0}
+                onOpen={() => openChat(c)}
+              />
+            ))
+          )}
+        </div>
 
-        {/* Groups inside the community — tap one to open its group chat */}
-        {groups.length > 0 && (
-          <>
-            <h2 className="mb-2 mt-5 text-xs font-bold uppercase tracking-wider text-[var(--color-faint)]">
-              Groups you&apos;re in
-            </h2>
-            <div className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white">
-              {groups.map((c, i) => (
-                <GroupRow key={c.id} c={c} first={i === 0} onOpen={() => setChat(c)} />
-              ))}
-            </div>
-          </>
-        )}
-
-        <p className="mt-4 px-1 text-[11px] leading-relaxed text-[var(--color-faint)]">
-          Your placement comes from your registration (State › LGA › Ward › Polling Unit) and is verified by NIN.
-          To move groups, update your profile placement.
+        <p className="border-t border-[var(--color-line)] px-4 py-3 text-[11px] leading-relaxed text-[var(--color-faint)]">
+          Your placement comes from your registration (State › LGA › Ward › Polling Unit), verified by NIN.
         </p>
       </div>
-    </div>
-  );
-}
 
-/* ----------------------------- parent card ----------------------------- */
-
-function ParentCard({
-  c,
-  onOpen,
-  onMembers,
-}: {
-  c: CommunityDTO;
-  onOpen: () => void;
-  onMembers: () => void;
-}) {
-  const meta = SCOPE_META[c.scope];
-  const Icon = meta.icon;
-  return (
-    <div className="relative overflow-hidden rounded-3xl gradient-brand p-5 text-white shadow-sm">
-      <div className="absolute -right-10 -top-12 size-44 rounded-full bg-white/10" />
-      <div className="absolute -bottom-14 right-20 size-36 rounded-full bg-white/10" />
-      <div className="relative">
-        <div className="flex items-start gap-3.5">
-          <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white/20 ring-1 ring-white/25">
-            <Icon className="h-7 w-7" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-white/80">{meta.label}</div>
-            <h2 className="truncate text-xl font-extrabold tracking-tight">{c.name}</h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-white/85">
-              <span className="flex items-center gap-1.5 font-semibold">
-                <Users className="h-3.5 w-3.5" /> {fmt(c.memberCount)} member{c.memberCount === 1 ? "" : "s"}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <ShieldCheck className="h-3.5 w-3.5" /> {c.controlledBy}
-              </span>
+      {/* ===================== Chat panel ===================== */}
+      <div className={`relative h-full min-w-0 flex-1 flex-col ${chat ? "flex" : "hidden md:flex"}`}>
+        {!chat ? (
+          <div className="grid h-full place-items-center text-center">
+            <div>
+              <div className="mx-auto mb-3 grid size-16 place-items-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-brand-strong)]">
+                <Users className="h-8 w-8" />
+              </div>
+              <p className="text-sm font-medium text-[var(--color-muted)]">Select a community to open its group chat</p>
             </div>
           </div>
-        </div>
-        {c.description && <p className="mt-3 text-sm leading-relaxed text-white/85">{c.description}</p>}
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <button
-            onClick={onOpen}
-            className="flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-[var(--color-brand-strong)] shadow-sm transition hover:bg-white/90"
-          >
-            <Megaphone className="h-4 w-4" /> Open group chat
-          </button>
-          <button
-            onClick={onMembers}
-            className="flex items-center gap-2 rounded-full bg-white/15 px-4 py-2 text-sm font-bold text-white ring-1 ring-white/30 transition hover:bg-white/25"
-          >
-            <Users className="h-4 w-4" /> View members
-          </button>
-        </div>
+        ) : (
+          // No `key` here on purpose — keying on chat.id would force a full
+          // unmount/remount on every switch, which is exactly what defeats
+          // the per-community cache below (every switch would re-show the
+          // "joining…" spinner and re-fetch from scratch). Staying mounted
+          // and reacting to the `community` prop change is what makes
+          // switching between groups instant.
+          <CommunityChat
+            community={chat}
+            onBack={() => setChat(null)}
+            onShowMembers={() => setOpen(chat)}
+          />
+        )}
       </div>
     </div>
   );
@@ -199,15 +202,27 @@ function ParentCard({
 
 /* ------------------------------ group row ------------------------------ */
 
-function GroupRow({ c, first, onOpen }: { c: CommunityDTO; first: boolean; onOpen: () => void }) {
+function GroupRow({
+  c,
+  first,
+  active,
+  unread,
+  onOpen,
+}: {
+  c: CommunityDTO;
+  first: boolean;
+  active: boolean;
+  unread: number;
+  onOpen: () => void;
+}) {
   const meta = SCOPE_META[c.scope];
   const Icon = meta.icon;
   return (
     <button
       onClick={onOpen}
-      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition hover:bg-[var(--color-surface-2)] ${
-        first ? "" : "border-t border-[var(--color-line)]"
-      }`}
+      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition ${
+        active ? "bg-[var(--color-brand-tint)]/60" : "hover:bg-[var(--color-surface-2)]"
+      } ${first ? "" : "border-t border-[var(--color-line)]"}`}
     >
       <span
         className="grid size-11 shrink-0 place-items-center rounded-xl"
@@ -231,6 +246,11 @@ function GroupRow({ c, first, onOpen }: { c: CommunityDTO; first: boolean; onOpe
           </span>
         </span>
       </span>
+      {unread > 0 && (
+        <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-[var(--color-brand)] px-1.5 text-[11px] font-bold text-white">
+          {unread > 99 ? "99+" : unread}
+        </span>
+      )}
       <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-faint)]" />
     </button>
   );

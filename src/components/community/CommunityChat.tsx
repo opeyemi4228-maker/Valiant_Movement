@@ -23,6 +23,14 @@ function nowMs() {
   return Date.now();
 }
 
+interface ChatCacheEntry {
+  conversationId: string;
+  memberCount: number;
+  messages: ChatMessageDTO[];
+  otherReadAt: string | null;
+  otherOnline: boolean;
+}
+
 export function CommunityChat({
   community,
   onBack,
@@ -60,30 +68,81 @@ export function CommunityChat({
   // just early). Blanking this window out is what stops a sent message
   // from flashing away and reappearing a poll cycle later.
   const sendingRef = useRef(0);
+  // Per-community cache: this component is now kept mounted across group
+  // switches (Communities.tsx no longer key-remounts it), so a plain ref
+  // persists across `community.id` prop changes. Switching back to a group
+  // you've already opened this session shows its cached messages instantly
+  // instead of a fresh "joining…" spinner — same pattern as the Messages cache.
+  const chatCacheRef = useRef<Map<string, ChatCacheEntry>>(new Map());
 
   /* --- join the group + first load --- */
   useEffect(() => {
     let alive = true;
-    openCommunityChat(community.id).then((res) => {
-      if (!alive) return;
-      if (!res.ok || !res.chat) {
-        setError(res.error ?? "Couldn't open this community's chat.");
-        setState("error");
-        return;
-      }
-      setConversationId(res.chat.conversationId);
-      setMemberCount(res.chat.memberCount);
+
+    const cached = chatCacheRef.current.get(community.id);
+    if (cached) {
+      // Show what we already have instantly; the fetch below reconciles it.
+      setConversationId(cached.conversationId);
+      setMemberCount(cached.memberCount);
+      setMessages(cached.messages);
+      setOtherReadAt(cached.otherReadAt);
+      setOtherOnline(cached.otherOnline);
       setState("ready");
-      const seq = ++msgSeqRef.current;
-      getMessages(res.chat.conversationId).then((m) => {
-        if (alive && m.ok && seq === msgSeqRef.current) {
-          setMessages(m.messages);
-          setOtherReadAt(m.otherLastReadAt ?? null);
-          setOtherOnline(m.otherOnline ?? false);
-        }
-      });
-    });
+    } else {
+      setState("joining");
+      setConversationId(null);
+      setMessages([]);
+      setOtherReadAt(null);
+      setOtherOnline(false);
+      setMemberCount(community.memberCount);
+    }
+    setError(null);
+
+    // Retries on top of the server's own retry — a transient failure (or a
+    // rejected promise with no .catch()) previously left `state` stuck on
+    // "joining…" forever, since nothing else ever flips it.
+    const attempt = (n: number) => {
+      openCommunityChat(community.id)
+        .then((res) => {
+          if (!alive) return;
+          if (res.transient && n < 6) {
+            setTimeout(() => { if (alive) attempt(n + 1); }, Math.min(800 * (n + 1), 4000));
+            return;
+          }
+          if (!res.ok || !res.chat) {
+            if (!cached) {
+              setError(res.error ?? "Couldn't open this community's chat.");
+              setState("error");
+            }
+            return;
+          }
+          const { conversationId: cid, memberCount: mc } = res.chat;
+          setConversationId(cid);
+          setMemberCount(mc);
+          setState("ready");
+          const seq = ++msgSeqRef.current;
+          getMessages(cid).then((m) => {
+            if (!alive || !m.ok || seq !== msgSeqRef.current) return;
+            setMessages(m.messages);
+            setOtherReadAt(m.otherLastReadAt ?? null);
+            setOtherOnline(m.otherOnline ?? false);
+            chatCacheRef.current.set(community.id, {
+              conversationId: cid,
+              memberCount: mc,
+              messages: m.messages,
+              otherReadAt: m.otherLastReadAt ?? null,
+              otherOnline: m.otherOnline ?? false,
+            });
+          });
+        })
+        .catch(() => {
+          if (!alive) return;
+          if (n < 6) setTimeout(() => { if (alive) attempt(n + 1); }, Math.min(800 * (n + 1), 4000));
+        });
+    };
+    attempt(0);
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [community.id]);
 
   /* --- poll the thread + live-huddle banner (near real-time) --- */
@@ -104,6 +163,13 @@ export function CommunityChat({
           setMessages(res.messages);
           setOtherReadAt(res.otherLastReadAt ?? null);
           setOtherOnline(res.otherOnline ?? false);
+          chatCacheRef.current.set(community.id, {
+            conversationId,
+            memberCount,
+            messages: res.messages,
+            otherReadAt: res.otherLastReadAt ?? null,
+            otherOnline: res.otherOnline ?? false,
+          });
         }
         setLiveHuddle(live);
       } catch {
@@ -113,7 +179,7 @@ export function CommunityChat({
       }
     }, 200); // tightened again — as fast as this architecture allows
     return () => clearInterval(t);
-  }, [state, conversationId, community.id]);
+  }, [state, conversationId, community.id, memberCount]);
 
   /* --- start or join the community huddle (group call for everyone) --- */
   async function openHuddle(mode: "voice" | "video") {
@@ -177,6 +243,13 @@ export function CommunityChat({
             setMessages(fresh.messages);
             setOtherReadAt(fresh.otherLastReadAt ?? null);
             setOtherOnline(fresh.otherOnline ?? false);
+            chatCacheRef.current.set(community.id, {
+              conversationId,
+              memberCount,
+              messages: fresh.messages,
+              otherReadAt: fresh.otherLastReadAt ?? null,
+              otherOnline: fresh.otherOnline ?? false,
+            });
           }
           return { ok: true };
         }
@@ -188,7 +261,7 @@ export function CommunityChat({
         sendingRef.current = Math.max(0, sendingRef.current - 1);
       }
     },
-    [conversationId],
+    [conversationId, community.id, memberCount],
   );
 
   if (state === "joining") {
@@ -242,7 +315,7 @@ export function CommunityChat({
         <button
           onClick={onBack}
           aria-label="Back to communities"
-          className="grid size-9 place-items-center rounded-full text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
+          className="grid size-9 place-items-center rounded-full text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)] md:hidden"
         >
           <ArrowLeft className="h-5 w-5" />
         </button>

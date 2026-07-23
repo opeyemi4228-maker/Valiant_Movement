@@ -60,9 +60,16 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
   }, []);
 
   const refresh = useCallback(async () => {
-    const [s, d] = await Promise.all([getWalletSummary(), getDuesStatus()]);
-    setSummary(s);
-    setDues({ due: d.due, amount: d.amount });
+    // Both calls already retry + never throw server-side; a `null` here
+    // means every retry was exhausted, so keep whatever's on screen instead
+    // of flashing a zeroed balance. Independent reads — run together.
+    try {
+      const [s, d] = await Promise.all([getWalletSummary(), getDuesStatus()]);
+      if (s) setSummary(s);
+      if (d) setDues({ due: d.due, amount: d.amount });
+    } catch {
+      /* transient — the next poll recovers */
+    }
   }, []);
 
   // Initial load + a background poll (deposits/withdrawals settle async, via
@@ -76,7 +83,7 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
       refresh();
       ensureDuesNotifications().catch(() => {});
     }, 0); // after paint — no sync setState in the effect body
-    const t = setInterval(refresh, 4000);
+    const t = setInterval(refresh, 1500); // tightened — matches the rest of the app's real-time feel
     return () => {
       clearTimeout(kick);
       clearInterval(t);

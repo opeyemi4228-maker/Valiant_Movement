@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb, hasMonnify, hasMonnifyDisbursement } from "@/lib/env";
 import { env } from "@/lib/env";
+import { withRetry } from "@/lib/retry";
 import * as wdb from "@/lib/wallet-db";
 import type { PaymentDTO } from "@/lib/wallet-db";
 import * as monnify from "@/lib/monnify";
@@ -36,19 +37,27 @@ async function me() {
   return u;
 }
 
-export async function getWalletSummary(): Promise<WalletSummary> {
+/** Polled every ~1.5s. Returns `null` on a transient failure (retries
+ *  exhausted) so the client keeps whatever it last had on screen instead of
+ *  flashing a zeroed-out balance — the next poll tick recovers. */
+export async function getWalletSummary(): Promise<WalletSummary | null> {
   const u = await me();
   if (!u) {
     return { available: false, monnifyConfigured: false, withdrawalsConfigured: false, balance: 0, payments: [] };
   }
-  const [balance, payments] = await Promise.all([wdb.getBalance(u.id), wdb.listRecentPayments(u.id)]);
-  return {
-    available: true,
-    monnifyConfigured: hasMonnify(),
-    withdrawalsConfigured: hasMonnifyDisbursement(),
-    balance,
-    payments,
-  };
+  try {
+    const [balance, payments] = await withRetry(() => Promise.all([wdb.getBalance(u.id), wdb.listRecentPayments(u.id)]));
+    return {
+      available: true,
+      monnifyConfigured: hasMonnify(),
+      withdrawalsConfigured: hasMonnifyDisbursement(),
+      balance,
+      payments,
+    };
+  } catch (err) {
+    console.error("getWalletSummary failed (returning null so the client keeps its last-known state):", err);
+    return null;
+  }
 }
 
 /* -------------------------------- deposits -------------------------------- */
