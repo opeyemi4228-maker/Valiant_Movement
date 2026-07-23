@@ -13,8 +13,11 @@ import {
   User,
   LogOut,
   Feather,
+  Radio,
+  X,
 } from "lucide-react";
 import { logout } from "@/app/actions/auth";
+import type { ActiveHuddleAlert } from "@/app/actions/realtime";
 import { ExpandableTabs } from "@/components/ui/expandable-tabs";
 import { LiveFeed } from "./LiveFeed";
 import { Communities } from "./Communities";
@@ -88,6 +91,8 @@ export function MemberShell({
   const [notifUnread, setNotifUnread] = useState(0);
   const [messagesUnread, setMessagesUnread] = useState(0);
   const [communitiesUnread, setCommunitiesUnread] = useState(0);
+  const [activeHuddles, setActiveHuddles] = useState<ActiveHuddleAlert[]>([]);
+  const [dismissedHuddles, setDismissedHuddles] = useState<Set<string>>(new Set());
   const name = user.fullName ?? "Member";
 
   // Live nav badges — RealtimePresence broadcasts these unread counts every
@@ -96,19 +101,29 @@ export function MemberShell({
     const onCount = (e: Event) => setNotifUnread((e as CustomEvent<number>).detail ?? 0);
     const onMessagesCount = (e: Event) => setMessagesUnread((e as CustomEvent<number>).detail ?? 0);
     const onCommunitiesCount = (e: Event) => setCommunitiesUnread((e as CustomEvent<number>).detail ?? 0);
+    const onHuddles = (e: Event) => setActiveHuddles((e as CustomEvent<ActiveHuddleAlert[]>).detail ?? []);
     const onOpen = () => go("notifications");
     window.addEventListener("valiant:notif-unread", onCount);
     window.addEventListener("valiant:messages-unread", onMessagesCount);
     window.addEventListener("valiant:communities-unread", onCommunitiesCount);
+    window.addEventListener("valiant:active-huddles", onHuddles);
     window.addEventListener("valiant:open-notifications", onOpen);
     return () => {
       window.removeEventListener("valiant:notif-unread", onCount);
       window.removeEventListener("valiant:messages-unread", onMessagesCount);
       window.removeEventListener("valiant:communities-unread", onCommunitiesCount);
+      window.removeEventListener("valiant:active-huddles", onHuddles);
       window.removeEventListener("valiant:open-notifications", onOpen);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Shown app-wide except while already on Communities — that tab has its
+  // own in-context "Join" banner + row badges, so this would be redundant
+  // there. This is what surfaces a live huddle to members on Home,
+  // Messages, Finance, etc., who previously had zero visibility into it.
+  const huddleAlerts =
+    tab === "communities" ? [] : activeHuddles.filter((h) => !dismissedHuddles.has(h.huddleId));
   const handle = "@" + name.toLowerCase().replace(/\s+/g, "_");
 
   const me = { name, handle, color: "#e07400", email: user.email, avatar: user.avatarUrl ?? undefined };
@@ -140,6 +155,36 @@ export function MemberShell({
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
+      {/* App-wide "a huddle is live" banner — visible from any tab except
+          Communities (which already has its own in-context join banner).
+          Persists until the huddle actually ends; dismissing just hides it
+          for this session, it reappears if a NEW huddle starts. */}
+      {huddleAlerts.length > 0 && (
+        <div className="fixed inset-x-0 top-0 z-[85] flex justify-center px-3 pt-2">
+          <div className="flex w-full max-w-md items-center gap-3 rounded-2xl bg-[var(--color-navy)] px-4 py-2.5 text-white shadow-xl">
+            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--color-green)]/20 text-[var(--color-green)]">
+              <Radio className="h-4 w-4 animate-pulse" />
+            </span>
+            <button onClick={() => go("communities")} className="min-w-0 flex-1 text-left leading-tight">
+              <div className="truncate text-[13.5px] font-bold">
+                {huddleAlerts[0].mode === "video" ? "Video" : "Voice"} huddle live · {huddleAlerts[0].communityName}
+              </div>
+              <div className="truncate text-[11.5px] text-white/70">
+                {huddleAlerts[0].count} in the room
+                {huddleAlerts.length > 1 ? ` · +${huddleAlerts.length - 1} more live` : ""} — tap to join
+              </div>
+            </button>
+            <button
+              onClick={() => setDismissedHuddles((prev) => new Set(prev).add(huddleAlerts[0].huddleId))}
+              aria-label="Dismiss"
+              className="grid size-7 shrink-0 place-items-center rounded-full text-white/60 transition hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ============================ Sidebar (desktop) ============================ */}
       <aside className="hidden w-[88px] shrink-0 flex-col border-r border-[var(--color-line)] bg-white px-2 py-4 lg:flex xl:w-[270px] xl:px-4">
         <SidebarInner

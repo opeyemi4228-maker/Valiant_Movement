@@ -48,7 +48,7 @@ export function CommunityChat({
   const [otherReadAt, setOtherReadAt] = useState<string | null>(null);
   const [otherOnline, setOtherOnline] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [huddle, setHuddle] = useState<{ huddleId: string; meId: string; mode: "voice" | "video" } | null>(null);
+  const [huddle, setHuddle] = useState<{ huddleId: string; meId: string; mode: "voice" | "video"; isHost: boolean } | null>(null);
   const [liveHuddle, setLiveHuddle] = useState<{ huddleId: string; mode: string; count: number } | null>(null);
   const [joining, setJoining] = useState(false);
 
@@ -193,7 +193,12 @@ export function CommunityChat({
     }
     setJoining(false);
     if (res.ok && res.huddleId && res.meId) {
-      setHuddle({ huddleId: res.huddleId, meId: res.meId, mode: (res.mode as "voice" | "video") ?? mode });
+      setHuddle({
+        huddleId: res.huddleId,
+        meId: res.meId,
+        mode: (res.mode as "voice" | "video") ?? mode,
+        isHost: res.startedBy === res.meId,
+      });
     } else {
       setToast(res.error ?? "Couldn't start the huddle — please try again.");
       setTimeout(() => setToast(null), 3200);
@@ -298,6 +303,7 @@ export function CommunityChat({
           meId={huddle.meId}
           mode={huddle.mode}
           title={community.name}
+          isHost={huddle.isHost}
           onClose={() => setHuddle(null)}
         />
       )}

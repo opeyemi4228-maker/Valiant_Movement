@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Mic, MicOff, PhoneOff, Users, Video as VideoIcon, VideoOff } from "lucide-react";
 import {
+  endCommunityHuddle,
   leaveCommunityHuddle,
   pollCommunityHuddle,
   sendHuddleIce,
@@ -62,17 +63,23 @@ export function HuddleRoom({
   meId,
   mode,
   title,
+  isHost = false,
   onClose,
 }: {
   huddleId: string;
   meId: string;
   mode: "voice" | "video";
   title: string;
+  /** The member who started this huddle gets an "End for everyone" control
+   *  distinct from "Leave" — without it, the host could only step out
+   *  themselves while the call kept running for whoever was left. */
+  isHost?: boolean;
   onClose: () => void;
 }) {
   const isVideo = mode === "video";
   const [peers, setPeers] = useState<HuddlePeerDTO[]>([]);
   const [streams, setStreams] = useState<Map<string, MediaStream>>(new Map());
+  const [ending, setEnding] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(isVideo);
@@ -92,10 +99,14 @@ export function HuddleRoom({
   useEffect(() => { camOnRef.current = camOn; }, [camOn]);
 
   /* ---- timer ---- */
+  // Only counts while someone else is actually in the room — previously it
+  // started ticking the instant the host opened the huddle, so a host
+  // waiting alone watched the clock run before the "call" had even begun.
   useEffect(() => {
+    if (peers.length === 0) return;
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [peers.length]);
 
   /* ---- mesh: local media + signaling loop ---- */
   useEffect(() => {
@@ -321,6 +332,21 @@ export function HuddleRoom({
     onClose();
   }
 
+  async function endForEveryone() {
+    if (ending) return;
+    if (leaveTimerRef.current) { clearTimeout(leaveTimerRef.current); leaveTimerRef.current = null; }
+    setEnding(true);
+    closedRef.current = true;
+    try {
+      await endCommunityHuddle(huddleId);
+    } catch {
+      /* best-effort — everyone's own poll will still catch a real end;
+         if this specific request failed we've already closed our own
+         view below regardless. */
+    }
+    onClose();
+  }
+
   const inRoom = peers.length + 1;
   const cols = inRoom <= 2 ? "grid-cols-1 sm:grid-cols-2" : inRoom <= 4 ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-3";
 
@@ -420,6 +446,20 @@ export function HuddleRoom({
         >
           <PhoneOff className="h-5 w-5" /> Leave
         </button>
+        {/* Host-only — leaving otherwise just steps you out while the
+            huddle keeps running for whoever's left. Only shown once someone
+            else is actually here; alone, Leave already ends it for everyone. */}
+        {isHost && peers.length > 0 && (
+          <button
+            onClick={endForEveryone}
+            disabled={ending}
+            title="End this huddle for every participant"
+            className="flex h-12 items-center gap-2 rounded-full border border-[var(--color-danger)] px-5 font-bold text-[var(--color-danger)] shadow-lg transition hover:bg-[var(--color-danger)]/10 disabled:opacity-60"
+          >
+            {ending ? <Loader2 className="h-5 w-5 animate-spin" /> : <PhoneOff className="h-5 w-5" />}
+            {ending ? "Ending…" : "End for everyone"}
+          </button>
+        )}
       </footer>
     </div>
   );

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, gt, isNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   communities,
@@ -66,7 +66,7 @@ function pair(me: string, other: string): { aId: string; bId: string } {
  */
 export async function activeHuddleFor(
   communityId: string,
-): Promise<{ huddleId: string; mode: string; count: number } | null> {
+): Promise<{ huddleId: string; mode: string; count: number; startedBy: string } | null> {
   const [c] = await db
     .select({ conversationId: communities.conversationId })
     .from(communities)
@@ -75,7 +75,7 @@ export async function activeHuddleFor(
   if (!c?.conversationId) return null;
 
   const [h] = await db
-    .select({ id: huddles.id, mode: huddles.mode })
+    .select({ id: huddles.id, mode: huddles.mode, startedBy: huddles.startedBy })
     .from(huddles)
     .where(and(eq(huddles.conversationId, c.conversationId), isNull(huddles.endedAt)))
     .orderBy(desc(huddles.startedAt))
@@ -88,7 +88,42 @@ export async function activeHuddleFor(
     .from(huddlePeers)
     .where(and(eq(huddlePeers.huddleId, h.id), isNull(huddlePeers.leftAt), gt(huddlePeers.lastSeenAt, fresh)));
   if (n === 0) return null; // nothing to show right now — the room itself is untouched
-  return { huddleId: h.id, mode: h.mode, count: n };
+  return { huddleId: h.id, mode: h.mode, count: n, startedBy: h.startedBy };
+}
+
+/** Every live huddle across every community this member belongs to — drives
+ *  the app-wide "a huddle is happening" banner for members who aren't
+ *  currently looking at that community (Home, Messages, Finance, etc. all
+ *  had zero visibility into this before; only opening Communities showed
+ *  anything). Batched (2 queries total, not one per community). */
+export async function activeHuddlesForMember(userId: string): Promise<
+  { communityId: string; communityName: string; huddleId: string; mode: string; count: number }[]
+> {
+  const rows = await db
+    .select({
+      communityId: communities.id,
+      communityName: communities.name,
+      huddleId: huddles.id,
+      mode: huddles.mode,
+    })
+    .from(communityMembers)
+    .innerJoin(communities, eq(communities.id, communityMembers.communityId))
+    .innerJoin(huddles, and(eq(huddles.conversationId, communities.conversationId), isNull(huddles.endedAt)))
+    .where(eq(communityMembers.userId, userId));
+  if (rows.length === 0) return [];
+
+  const fresh = new Date(Date.now() - PEER_TTL_MS);
+  const huddleIds = rows.map((r) => r.huddleId);
+  const countRows = await db
+    .select({ huddleId: huddlePeers.huddleId, n: sql<number>`count(*)::int` })
+    .from(huddlePeers)
+    .where(and(inArray(huddlePeers.huddleId, huddleIds), isNull(huddlePeers.leftAt), gt(huddlePeers.lastSeenAt, fresh)))
+    .groupBy(huddlePeers.huddleId);
+  const countByHuddle = new Map(countRows.map((r) => [r.huddleId, r.n]));
+
+  return rows
+    .map((r) => ({ ...r, count: countByHuddle.get(r.huddleId) ?? 0 }))
+    .filter((r) => r.count > 0); // nothing to show for a huddle with no fresh peers right now
 }
 
 /** Start (or join the already-live) huddle for a community. */
@@ -96,7 +131,7 @@ export async function startOrJoinHuddle(
   userId: string,
   communityId: string,
   mode: "voice" | "video",
-): Promise<{ ok: boolean; huddleId?: string; mode?: string; error?: string }> {
+): Promise<{ ok: boolean; huddleId?: string; mode?: string; startedBy?: string; error?: string }> {
   const [membership] = await db
     .select({ role: communityMembers.role })
     .from(communityMembers)
@@ -114,6 +149,7 @@ export async function startOrJoinHuddle(
   const live = await activeHuddleFor(communityId);
   let huddleId = live?.huddleId;
   let liveMode = live?.mode ?? mode;
+  const startedBy = live?.startedBy ?? userId;
 
   if (!huddleId) {
     const [h] = await db
@@ -165,7 +201,7 @@ export async function startOrJoinHuddle(
       set: { lastSeenAt: new Date(), leftAt: null },
     });
 
-  return { ok: true, huddleId, mode: liveMode };
+  return { ok: true, huddleId, mode: liveMode, startedBy };
 }
 
 /** Heartbeat + room state: active peers and my pair signals, in one trip. */
@@ -282,6 +318,77 @@ export async function leaveHuddle(userId: string, huddleId: string): Promise<voi
     // The huddle ending correctly must never hinge on this log entry.
     console.error("huddle call-event log failed:", err);
   }
+}
+
+/**
+ * The member who started the huddle ends it for everyone — distinct from
+ * `leaveHuddle` (which only ever removes the caller and leaves the room
+ * running for whoever's left). Without this, the host had no way to
+ * actually end the call; "Leave" just meant "I stepped out," and the
+ * huddle kept going for everyone else.
+ *
+ * Authorization is the WHERE clause itself (`startedBy = userId`), not a
+ * separate check-then-act — a single atomic UPDATE, safe under Neon's
+ * no-interactive-transactions constraint. If it affects zero rows, either
+ * this isn't the host or the huddle already ended; both cases are reported
+ * back as a no-op rather than silently pretending to succeed.
+ */
+export async function endHuddleForEveryone(
+  userId: string,
+  huddleId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const flipped = await db
+    .update(huddles)
+    .set({ endedAt: new Date() })
+    .where(and(eq(huddles.id, huddleId), isNull(huddles.endedAt), eq(huddles.startedBy, userId)))
+    .returning({
+      conversationId: huddles.conversationId,
+      mode: huddles.mode,
+      startedBy: huddles.startedBy,
+      startedAt: huddles.startedAt,
+    });
+  if (flipped.length === 0) {
+    return { ok: false, error: "Only the member who started this huddle can end it for everyone." };
+  }
+  const h = flipped[0];
+
+  // Every remaining peer's own poll already sees `ended: true` the moment
+  // huddles.endedAt is set (see pollHuddle above) — this just keeps the
+  // peer-list bookkeeping clean, it isn't what actually disconnects anyone.
+  await db
+    .update(huddlePeers)
+    .set({ leftAt: new Date() })
+    .where(and(eq(huddlePeers.huddleId, huddleId), isNull(huddlePeers.leftAt)));
+
+  const others = await db
+    .select({ userId: huddlePeers.userId })
+    .from(huddlePeers)
+    .where(and(eq(huddlePeers.huddleId, huddleId), ne(huddlePeers.userId, h.startedBy)))
+    .limit(1);
+
+  try {
+    if (others.length === 0) {
+      await db.insert(messages).values({
+        conversationId: h.conversationId,
+        senderId: h.startedBy,
+        body: null,
+        media: { kind: "call", callMode: h.mode, callStatus: "missed" },
+        deliveredAt: new Date(),
+      });
+    } else {
+      const durationSec = Math.max(1, Math.round((Date.now() - h.startedAt.getTime()) / 1000));
+      await db.insert(messages).values({
+        conversationId: h.conversationId,
+        senderId: h.startedBy,
+        body: null,
+        media: { kind: "call", callMode: h.mode, callStatus: "completed", duration: durationSec },
+        deliveredAt: new Date(),
+      });
+    }
+  } catch (err) {
+    console.error("huddle call-event log failed:", err);
+  }
+  return { ok: true };
 }
 
 /** Store an SDP for my pair with `otherId` (creates the pair row lazily). */

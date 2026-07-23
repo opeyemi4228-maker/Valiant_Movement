@@ -10,7 +10,7 @@ import type { HuddlePeerDTO, HuddleSignalDTO } from "@/lib/huddle-db";
 export async function startCommunityHuddle(
   communityId: string,
   mode: "voice" | "video",
-): Promise<{ ok: boolean; huddleId?: string; mode?: string; meId?: string; error?: string }> {
+): Promise<{ ok: boolean; huddleId?: string; mode?: string; meId?: string; startedBy?: string; error?: string }> {
   const u = await getCurrentUserSafe();
   if (!u || !usesDb(u.id)) return { ok: false, error: "Huddles are for registered members." };
   const res = await hdb.startOrJoinHuddle(u.id, communityId, mode);
@@ -48,6 +48,18 @@ export async function leaveCommunityHuddle(huddleId: string): Promise<void> {
   const u = await getCurrentUserSafe();
   if (!u || !usesDb(u.id)) return;
   await hdb.leaveHuddle(u.id, huddleId).catch(() => {});
+}
+
+/** Host-only: end the huddle for every participant, not just the caller. */
+export async function endCommunityHuddle(huddleId: string): Promise<{ ok: boolean; error?: string }> {
+  const u = await getCurrentUserSafe();
+  if (!u || !usesDb(u.id)) return { ok: false, error: "Sign in as a registered member." };
+  try {
+    return await hdb.endHuddleForEveryone(u.id, huddleId);
+  } catch (err) {
+    console.error("endCommunityHuddle failed:", err);
+    return { ok: false, error: "Couldn't end the huddle — please try again." };
+  }
 }
 
 export async function sendHuddleSdp(

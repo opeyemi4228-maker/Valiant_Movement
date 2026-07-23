@@ -8,6 +8,7 @@ import { usesDb } from "@/lib/env";
 import * as mem from "@/lib/demo-store";
 import * as cdb from "@/lib/call-db";
 import { unreadCommunityMessagesFor } from "@/lib/communities";
+import { activeHuddlesForMember } from "@/lib/huddle-db";
 import { notify } from "@/lib/notify";
 import type { CallSignal, CallMode } from "@/lib/call-types";
 
@@ -115,34 +116,46 @@ export async function getSignal(callId: string): Promise<{
   return usesDb(callId) ? cdb.rtcGet(callId) : mem.rtcGet(callId);
 }
 
+export interface ActiveHuddleAlert {
+  communityId: string;
+  communityName: string;
+  huddleId: string;
+  mode: string;
+  count: number;
+}
+
 export async function pollPresence(): Promise<{
   incomingCall: CallSignal | null;
   unread: number;
   /** Unread across community group chats — drives the Communities nav badge.
    *  Always 0 for the demo backend (communities aren't available there). */
   communitiesUnread: number;
+  /** Every live huddle across this member's communities — drives the
+   *  app-wide "a huddle is happening" banner. Always [] for the demo backend. */
+  activeHuddles: ActiveHuddleAlert[];
 }> {
   // This is a high-frequency background heartbeat: a transient failure (Neon
   // cold start, network blip) must degrade to "nothing new" — the next poll
   // recovers — rather than surface an error to the page.
   try {
     const id = await me();
-    if (!id) return { incomingCall: null, unread: 0, communitiesUnread: 0 };
+    if (!id) return { incomingCall: null, unread: 0, communitiesUnread: 0, activeHuddles: [] };
     if (usesDb(id)) {
       // Heartbeat — "online" for chat read-receipt ticks is derived from how
       // fresh this timestamp is. Fire-and-forget: it must never slow down
       // the presence response itself.
       void db.update(users).set({ lastActiveAt: new Date() }).where(eq(users.id, id)).catch(() => {});
-      const [incomingCall, unread, communitiesUnread] = await Promise.all([
+      const [incomingCall, unread, communitiesUnread, activeHuddles] = await Promise.all([
         cdb.incomingCallFor(id),
         cdb.unreadFor(id),
         unreadCommunityMessagesFor(id),
+        activeHuddlesForMember(id),
       ]);
-      return { incomingCall, unread, communitiesUnread };
+      return { incomingCall, unread, communitiesUnread, activeHuddles };
     }
-    return { incomingCall: mem.incomingCallFor(id), unread: mem.unreadFor(id), communitiesUnread: 0 };
+    return { incomingCall: mem.incomingCallFor(id), unread: mem.unreadFor(id), communitiesUnread: 0, activeHuddles: [] };
   } catch (err) {
     console.error("pollPresence failed (returning empty):", err);
-    return { incomingCall: null, unread: 0, communitiesUnread: 0 };
+    return { incomingCall: null, unread: 0, communitiesUnread: 0, activeHuddles: [] };
   }
 }

@@ -35,7 +35,7 @@ export function RealtimePresence() {
         if (!alive) return;
 
         if (presenceRes.status === "fulfilled") {
-          const { unread, incomingCall, communitiesUnread } = presenceRes.value;
+          const { unread, incomingCall, communitiesUnread, activeHuddles } = presenceRes.value;
           if (prevUnread.current >= 0 && unread > prevUnread.current) {
             playDing();
             setToast("New message");
@@ -49,6 +49,10 @@ export function RealtimePresence() {
           // these used to be hardcoded placeholder numbers.
           window.dispatchEvent(new CustomEvent("valiant:messages-unread", { detail: unread }));
           window.dispatchEvent(new CustomEvent("valiant:communities-unread", { detail: communitiesUnread }));
+          // App-wide "a huddle is live" banner (MemberShell) — previously a
+          // huddle was invisible to anyone not already looking at that
+          // specific community's chat.
+          window.dispatchEvent(new CustomEvent("valiant:active-huddles", { detail: activeHuddles }));
         }
 
         // `null` means every server-side retry was exhausted — skip this

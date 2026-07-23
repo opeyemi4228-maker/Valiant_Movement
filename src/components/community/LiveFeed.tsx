@@ -122,6 +122,14 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
   // than they could drain, which used to make the whole app feel minutes
   // behind under load.
   const inFlightRef = useRef<Promise<void> | null>(null);
+  // While a like/repost/comment/bookmark's own confirm round-trip is in
+  // flight, the background poll must not touch `posts` at all — even its
+  // NEWEST request can read the database from just before that mutation
+  // committed, then overwrite the just-applied (correct) state with the
+  // stale pre-mutation snapshot a moment later. That's what made reposting
+  // (and reacting generally) look broken: it would flip, then silently
+  // revert until the next poll tick caught up.
+  const mutatingRef = useRef(0);
   const refresh = useCallback((): Promise<void> => {
     if (inFlightRef.current) return inFlightRef.current;
     const p = (async () => {
@@ -130,7 +138,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
         // current feed on screen instead of flashing it empty.
         const res = await loadFeedBundle();
         if (res) {
-          setPosts(res.posts);
+          if (mutatingRef.current === 0) setPosts(res.posts);
           setDbStories(res.stories);
           setLoaded(true);
         }
@@ -178,32 +186,52 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
     setPosts((prev) =>
       prev.map((p) => (p.id === id ? { ...p, liked: !p.liked, likes: p.likes + (p.liked ? -1 : 1) } : p)),
     );
-    const res = await likePost(id);
-    if (res.ok && res.post) upsert(res.post); // demo returns the post; DB reconciles on poll
+    mutatingRef.current++;
+    try {
+      const res = await likePost(id);
+      if (res.ok && res.post) upsert(res.post); // demo returns the post; DB reconciles on poll
+    } finally {
+      mutatingRef.current = Math.max(0, mutatingRef.current - 1);
+    }
   }
 
   async function onRepost(id: string) {
     setPosts((prev) =>
       prev.map((p) => (p.id === id ? { ...p, reposted: !p.reposted, reposts: p.reposts + (p.reposted ? -1 : 1) } : p)),
     );
-    const res = await repostPost(id);
-    if (res.ok && res.post) upsert(res.post);
+    mutatingRef.current++;
+    try {
+      const res = await repostPost(id);
+      if (res.ok && res.post) upsert(res.post);
+    } finally {
+      mutatingRef.current = Math.max(0, mutatingRef.current - 1);
+    }
   }
 
   async function onComment(id: string, text: string) {
-    const res = await commentPost(id, text);
-    if (res.ok) {
-      if (res.post) upsert(res.post);
-      else await refresh();
+    mutatingRef.current++;
+    try {
+      const res = await commentPost(id, text);
+      if (res.ok) {
+        if (res.post) upsert(res.post);
+        else await refresh();
+      }
+    } finally {
+      mutatingRef.current = Math.max(0, mutatingRef.current - 1);
     }
   }
 
   async function onBookmark(id: string) {
     setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, bookmarked: !p.bookmarked } : p)));
-    const res = await bookmarkPost(id);
-    if (res.ok) {
-      if (res.post) upsert(res.post);
-      else setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, bookmarked: !!res.bookmarked } : p)));
+    mutatingRef.current++;
+    try {
+      const res = await bookmarkPost(id);
+      if (res.ok) {
+        if (res.post) upsert(res.post);
+        else setPosts((prev) => prev.map((p) => (p.id === id ? { ...p, bookmarked: !!res.bookmarked } : p)));
+      }
+    } finally {
+      mutatingRef.current = Math.max(0, mutatingRef.current - 1);
     }
   }
 
