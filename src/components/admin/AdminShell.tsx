@@ -10,6 +10,8 @@ import { MembersDatabase } from "./MembersDatabase";
 import { AdminCommunity } from "./AdminCommunity";
 import { FinanceModule } from "./FinanceModule";
 import { MeetingsManager } from "./MeetingsManager";
+import { GatheringsManager } from "./GatheringsManager";
+import { Associations } from "./Associations";
 import { ValiantAILauncher } from "@/components/ai/ValiantAILauncher";
 import type { AdminRole } from "@/data/admin-roles";
 
@@ -178,6 +180,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
           {section === "dashboard" ? (
             <DashboardOverview
               role={role}
+              view={view}
               onViewMembers={() => changeSection("members")}
               onOpenMeetings={() => changeSection("meetings")}
             />
@@ -189,6 +192,10 @@ export function AdminShell({ role }: { role: AdminRole }) {
             <FinanceModule view={view} onViewChange={setView} />
           ) : section === "meetings" ? (
             <MeetingsManager />
+          ) : section === "gatherings" ? (
+            <GatheringsManager role={role} />
+          ) : section === "associations" ? (
+            <Associations />
           ) : (
             <Placeholder title={meta.title} subtitle={meta.subtitle} />
           )}

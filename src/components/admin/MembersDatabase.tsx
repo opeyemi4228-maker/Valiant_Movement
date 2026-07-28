@@ -1,54 +1,51 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BadgeCheck,
   ChevronLeft,
   ChevronRight,
   Clock,
   Download,
+  Loader2,
   MoreHorizontal,
   Search,
   ShieldCheck,
   Users,
 } from "lucide-react";
-import {
-  MEMBERS,
-  MEMBER_ROLES,
-  MEMBER_STATES,
-  type Member,
-  type MemberStatus,
-} from "@/data/mock-members";
-import { scopeMembers, type AdminScope } from "@/data/admin-roles";
+import { getAdminMembers, exportAdminMembersCsv, setCommunityMemberRole, type AdminMemberRow } from "@/app/actions/admin";
+import type { AdminScope } from "@/data/admin-roles";
 
 const PAGE_SIZE = 8;
 
-const STATUS_STYLES: Record<MemberStatus, string> = {
+const STATUS_STYLES: Record<string, string> = {
   active: "bg-[var(--color-green)]/12 text-[var(--color-green)]",
   pending: "bg-[var(--color-amber)]/15 text-[#a96a00]",
   suspended: "bg-[var(--color-danger)]/12 text-[var(--color-danger)]",
+  banned: "bg-[var(--color-danger)]/12 text-[var(--color-danger)]",
+};
+
+const ROLE_LABEL: Record<NonNullable<AdminMemberRow["communityRole"]>, string> = {
+  owner: "Coordinator",
+  admin: "Co-Coordinator",
+  moderator: "Delegate",
+  member: "Member",
 };
 
 function initials(name: string) {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase();
+  return name.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+function daysAgoIso(n: number) {
+  return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 }
 
 function StatCard({
-  label,
-  value,
-  sub,
-  icon,
-}: {
-  label: string;
-  value: string | number;
-  sub?: string;
-  icon: React.ReactNode;
-}) {
+  label, value, sub, icon,
+}: { label: string; value: string | number; sub?: string; icon: React.ReactNode }) {
   return (
     <div className="rounded-2xl border border-[var(--color-line)] bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between">
@@ -63,40 +60,118 @@ function StatCard({
   );
 }
 
+function downloadCsv(csv: string, filename: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; jurisdiction?: string } = {}) {
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [items, setItems] = useState<AdminMemberRow[]>([]);
+  const [communityId, setCommunityId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [stateFilter, setStateFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [page, setPage] = useState(0);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportFrom, setExportFrom] = useState(daysAgoIso(30));
+  const [exportTo, setExportTo] = useState(todayIso());
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
-  const base = useMemo(() => (scope ? scopeMembers(scope) : MEMBERS), [scope]);
   const scoped = scope && scope.level !== "national";
+
+  useEffect(() => {
+    let alive = true;
+    const attempt = (n: number) => {
+      getAdminMembers()
+        .then((res) => {
+          if (!alive) return;
+          if (!res) {
+            if (n < 4) { setTimeout(() => { if (alive) attempt(n + 1); }, 800 * (n + 1)); return; }
+            setState("error");
+            return;
+          }
+          setItems(res.items);
+          setCommunityId(res.community?.id ?? null);
+          setState("ready");
+        })
+        .catch(() => {
+          if (!alive) return;
+          if (n < 4) setTimeout(() => { if (alive) attempt(n + 1); }, 800 * (n + 1));
+          else setState("error");
+        });
+    };
+    attempt(0);
+    return () => { alive = false; };
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return base.filter((m) => {
-      if (q && !(m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || m.phone.includes(q) || m.id.toLowerCase().includes(q)))
+    return items.filter((m) => {
+      if (q && !(m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || (m.phone ?? "").includes(q)))
         return false;
-      if (stateFilter && m.state !== stateFilter) return false;
       if (statusFilter && m.status !== statusFilter) return false;
-      if (roleFilter && m.role !== roleFilter) return false;
+      if (roleFilter && m.communityRole !== roleFilter) return false;
       return true;
     });
-  }, [base, query, stateFilter, statusFilter, roleFilter]);
+  }, [items, query, statusFilter, roleFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pageCount - 1);
   const rows = filtered.slice(current * PAGE_SIZE, current * PAGE_SIZE + PAGE_SIZE);
 
   const stats = useMemo(() => {
-    const active = base.filter((m) => m.status === "active").length;
-    const pendingVerify = base.filter((m) => !m.ninVerified).length;
-    const states = new Set(base.map((m) => m.state)).size;
-    return { total: base.length, active, pendingVerify, states };
-  }, [base]);
+    const active = items.filter((m) => m.status === "active").length;
+    const pendingVerify = items.filter((m) => !m.verified).length;
+    const states = new Set(items.map((m) => m.state)).size;
+    return { total: items.length, active, pendingVerify, states };
+  }, [items]);
 
   const resetPage = () => setPage(0);
+
+  async function onSetRole(memberId: string, role: "owner" | "admin" | "moderator" | "member") {
+    if (!communityId) return;
+    const prev = items;
+    setItems((cur) => cur.map((m) => (m.id === memberId ? { ...m, communityRole: role } : m)));
+    const res = await setCommunityMemberRole(communityId, memberId, role);
+    if (!res.ok) setItems(prev); // roll back on failure
+  }
+
+  async function onExport() {
+    setExporting(true);
+    setExportError(null);
+    const res = await exportAdminMembersCsv(exportFrom, exportTo);
+    setExporting(false);
+    if (res.ok && res.csv && res.filename) {
+      downloadCsv(res.csv, res.filename);
+      setExportOpen(false);
+    } else {
+      setExportError(res.error ?? "Couldn't build the export.");
+    }
+  }
+
+  if (state === "loading") {
+    return (
+      <div className="grid h-64 place-items-center">
+        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+      </div>
+    );
+  }
+  if (state === "error") {
+    return (
+      <div className="grid h-64 place-items-center rounded-2xl border border-dashed border-[var(--color-line)] bg-white text-center">
+        <p className="text-sm text-[var(--color-muted)]">Couldn&apos;t load the member database — check your connection and reload.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -122,39 +197,29 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
               {filtered.length} {filtered.length === 1 ? "result" : "results"}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
               <input
                 value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  resetPage();
-                }}
-                placeholder="Search name, email, phone, ID…"
+                onChange={(e) => { setQuery(e.target.value); resetPage(); }}
+                placeholder="Search name, email, phone…"
                 className="h-10 w-full rounded-xl border border-[var(--color-line)] bg-white pl-9 pr-3 text-sm outline-none transition focus:border-[var(--color-brand)] focus:ring-4 focus:ring-[var(--color-brand)]/15 lg:w-72"
               />
             </div>
-            <select
-              value={stateFilter}
-              onChange={(e) => { setStateFilter(e.target.value); resetPage(); }}
-              className="h-10 cursor-pointer rounded-xl border border-[var(--color-line)] bg-white px-3 text-sm outline-none focus:border-[var(--color-brand)]"
-            >
-              <option value="">All states</option>
-              {MEMBER_STATES.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-            <select
-              value={roleFilter}
-              onChange={(e) => { setRoleFilter(e.target.value); resetPage(); }}
-              className="h-10 cursor-pointer rounded-xl border border-[var(--color-line)] bg-white px-3 text-sm outline-none focus:border-[var(--color-brand)]"
-            >
-              <option value="">All roles</option>
-              {MEMBER_ROLES.map((r) => (
-                <option key={r} value={r}>{r}</option>
-              ))}
-            </select>
+            {scoped && communityId && (
+              <select
+                value={roleFilter}
+                onChange={(e) => { setRoleFilter(e.target.value); resetPage(); }}
+                className="h-10 cursor-pointer rounded-xl border border-[var(--color-line)] bg-white px-3 text-sm outline-none focus:border-[var(--color-brand)]"
+              >
+                <option value="">All roles</option>
+                <option value="owner">Coordinator</option>
+                <option value="admin">Co-Coordinator</option>
+                <option value="moderator">Delegate</option>
+                <option value="member">Member</option>
+              </select>
+            )}
             <select
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); resetPage(); }}
@@ -165,10 +230,47 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
               <option value="pending">Pending</option>
               <option value="suspended">Suspended</option>
             </select>
-            <button className="flex h-10 items-center gap-2 rounded-xl border border-[var(--color-line)] bg-white px-3 text-sm font-medium text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]">
+            <button
+              onClick={() => setExportOpen((v) => !v)}
+              className="flex h-10 items-center gap-2 rounded-xl border border-[var(--color-line)] bg-white px-3 text-sm font-medium text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
+            >
               <Download className="h-4 w-4" />
               Export
             </button>
+            {exportOpen && (
+              <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-xl border border-[var(--color-line)] bg-white p-4 shadow-xl">
+                <p className="mb-2 text-xs font-bold uppercase tracking-wide text-[var(--color-faint)]">
+                  Download members who joined between
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="date"
+                    value={exportFrom}
+                    max={exportTo}
+                    onChange={(e) => setExportFrom(e.target.value)}
+                    className="h-9 flex-1 rounded-lg border border-[var(--color-line)] px-2 text-sm outline-none focus:border-[var(--color-brand)]"
+                  />
+                  <span className="text-xs text-[var(--color-faint)]">to</span>
+                  <input
+                    type="date"
+                    value={exportTo}
+                    min={exportFrom}
+                    max={todayIso()}
+                    onChange={(e) => setExportTo(e.target.value)}
+                    className="h-9 flex-1 rounded-lg border border-[var(--color-line)] px-2 text-sm outline-none focus:border-[var(--color-brand)]"
+                  />
+                </div>
+                {exportError && <p className="mt-2 text-xs font-medium text-[var(--color-danger)]">{exportError}</p>}
+                <button
+                  onClick={onExport}
+                  disabled={exporting}
+                  className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg gradient-brand text-sm font-bold text-white disabled:opacity-60"
+                >
+                  {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                  Download CSV
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -180,7 +282,7 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
                 <th className="px-4 py-3">Member</th>
                 <th className="px-4 py-3">Phone</th>
                 <th className="px-4 py-3">State / LGA</th>
-                <th className="px-4 py-3">Role</th>
+                {scoped && communityId && <th className="px-4 py-3">Role</th>}
                 <th className="px-4 py-3">NIN</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3">Joined</th>
@@ -189,7 +291,7 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
             </thead>
             <tbody>
               {rows.map((m) => (
-                <MemberRow key={m.id} m={m} />
+                <MemberRow key={m.id} m={m} showRole={!!(scoped && communityId)} onSetRole={onSetRole} />
               ))}
               {rows.length === 0 && (
                 <tr>
@@ -231,7 +333,14 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
   );
 }
 
-function MemberRow({ m }: { m: Member }) {
+function MemberRow({
+  m, showRole, onSetRole,
+}: {
+  m: AdminMemberRow;
+  showRole: boolean;
+  onSetRole: (memberId: string, role: "owner" | "admin" | "moderator" | "member") => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <tr className="border-b border-[var(--color-line-soft)] transition hover:bg-[var(--color-surface-2)]">
       <td className="px-4 py-3">
@@ -245,14 +354,18 @@ function MemberRow({ m }: { m: Member }) {
           </div>
         </div>
       </td>
-      <td className="px-4 py-3 text-[var(--color-ink-soft)]">{m.phone}</td>
+      <td className="px-4 py-3 text-[var(--color-ink-soft)]">{m.phone ?? "—"}</td>
       <td className="px-4 py-3">
         <div className="font-medium text-[var(--color-ink-soft)]">{m.state}</div>
         <div className="text-xs text-[var(--color-faint)]">{m.lga}</div>
       </td>
-      <td className="px-4 py-3 text-[var(--color-ink-soft)]">{m.role}</td>
+      {showRole && (
+        <td className="px-4 py-3 text-[var(--color-ink-soft)]">
+          {m.communityRole ? ROLE_LABEL[m.communityRole] : "—"}
+        </td>
+      )}
       <td className="px-4 py-3">
-        {m.ninVerified ? (
+        {m.verified ? (
           <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-green)]">
             <BadgeCheck className="h-3.5 w-3.5" />
             Verified
@@ -265,15 +378,43 @@ function MemberRow({ m }: { m: Member }) {
         )}
       </td>
       <td className="px-4 py-3">
-        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${STATUS_STYLES[m.status]}`}>
+        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${STATUS_STYLES[m.status] ?? "bg-[var(--color-surface-2)] text-[var(--color-muted)]"}`}>
           {m.status}
         </span>
       </td>
-      <td className="px-4 py-3 text-[var(--color-muted)]">{m.joined}</td>
-      <td className="px-4 py-3">
-        <button className="grid size-8 place-items-center rounded-lg text-[var(--color-faint)] transition hover:bg-[var(--color-line-soft)] hover:text-[var(--color-ink)]">
-          <MoreHorizontal className="h-4 w-4" />
-        </button>
+      <td className="px-4 py-3 text-[var(--color-muted)]">{new Date(m.joinedAt).toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" })}</td>
+      <td className="relative px-4 py-3">
+        {showRole ? (
+          <>
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              className="grid size-8 place-items-center rounded-lg text-[var(--color-faint)] transition hover:bg-[var(--color-line-soft)] hover:text-[var(--color-ink)]"
+            >
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-4 top-full z-20 w-48 overflow-hidden rounded-xl border border-[var(--color-line)] bg-white py-1 shadow-xl">
+                  <p className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-faint)]">Set role</p>
+                  {(["owner", "admin", "moderator", "member"] as const).map((r) => (
+                    <button
+                      key={r}
+                      onClick={() => { onSetRole(m.id, r); setMenuOpen(false); }}
+                      className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition hover:bg-[var(--color-surface-2)] ${m.communityRole === r ? "font-bold text-[var(--color-brand-strong)]" : "text-[var(--color-ink-soft)]"}`}
+                    >
+                      {ROLE_LABEL[r]}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        ) : (
+          <button className="grid size-8 place-items-center rounded-lg text-[var(--color-faint)] transition hover:bg-[var(--color-line-soft)] hover:text-[var(--color-ink)]">
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+        )}
       </td>
     </tr>
   );

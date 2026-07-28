@@ -2,7 +2,21 @@
    Valiant Movement — scoped admin roles
    One dashboard shell, filtered by jurisdiction. Each coordinator
    sees only their level: National › State › LGA › Ward.
-   Mock credentials live here until real appointments exist in the DB.
+
+   This file is imported by both server code (admin-auth.ts) and
+   client components, so it must stay a plain, synchronous, DB-free
+   module — the actual member/community data behind these scopes is
+   fetched live from Postgres in src/app/actions/admin.ts, keyed off
+   `scope.state` / `scope.lga` / `scope.ward` below.
+
+   Jurisdiction is configurable via env (COORDINATOR_STATE/LGA/WARD)
+   so a real deployment can point each single-account level at
+   whichever state/LGA/ward it's actually coordinating, without a
+   code change. This is intentionally ONE account per level for now
+   (matching how login works today) — scaling to a distinct
+   coordinator per state/LGA/ward nationwide needs a real
+   appointments table (map a member account → jurisdiction), which
+   is a separate, larger project than this file covers.
    ============================================================ */
 
 import { MEMBERS, type Member } from "./mock-members";
@@ -14,6 +28,24 @@ export interface AdminScope {
   state?: string;
   lga?: string;
   ward?: string;
+}
+
+/* Compat shim (mock-only, no DB — keeps this module synchronous and
+   client-importable). The Dashboard/Members admin views still read the mock
+   member set filtered by jurisdiction while they migrate to the live queries
+   in actions/admin.ts; this keeps the build green in the meantime. */
+export function wardOf(m: Member): string {
+  const n = ([...m.id].reduce((a, c) => a + c.charCodeAt(0), 0) % 12) + 1;
+  return "Ward " + String(n).padStart(2, "0");
+}
+
+export function scopeMembers(scope: AdminScope, members: Member[] = MEMBERS): Member[] {
+  return members.filter((m) => {
+    if (scope.state && m.state !== scope.state) return false;
+    if (scope.lga && m.lga !== scope.lga) return false;
+    if (scope.ward && wardOf(m) !== scope.ward) return false;
+    return true;
+  });
 }
 
 export interface AdminRole {
@@ -33,39 +65,9 @@ export interface AdminRole {
   tagline: string;
 }
 
-/** Deterministic pseudo-ward for a member (mock data has no ward column yet). */
-export function wardOf(m: Member): string {
-  const n = ([...m.id].reduce((a, c) => a + c.charCodeAt(0), 0) % 12) + 1;
-  return "Ward " + String(n).padStart(2, "0");
-}
-
-/** Filter the member set down to a coordinator's jurisdiction. */
-export function scopeMembers(scope: AdminScope, members: Member[] = MEMBERS): Member[] {
-  return members.filter((m) => {
-    if (scope.state && m.state !== scope.state) return false;
-    if (scope.lga && m.lga !== scope.lga) return false;
-    if (scope.ward && wardOf(m) !== scope.ward) return false;
-    return true;
-  });
-}
-
-/* --- derive populous jurisdictions so every dashboard has real data --- */
-
-function topBy<T extends string>(items: T[]): T {
-  const counts = new Map<T, number>();
-  for (const it of items) counts.set(it, (counts.get(it) ?? 0) + 1);
-  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
-}
-
-const TOP_STATE = topBy(MEMBERS.map((m) => m.state));
-const STATE_MEMBERS = MEMBERS.filter((m) => m.state === TOP_STATE);
-const TOP_LGA = topBy(STATE_MEMBERS.map((m) => m.lga));
-const LGA_MEMBERS = STATE_MEMBERS.filter((m) => m.lga === TOP_LGA);
-const TOP_WARD = topBy(LGA_MEMBERS.map(wardOf));
-const WARD_MEMBERS = LGA_MEMBERS.filter((m) => wardOf(m) === TOP_WARD);
-const LGAS_IN_STATE = new Set(STATE_MEMBERS.map((m) => m.lga)).size;
-
-const num = (n: number) => n.toLocaleString();
+const STATE = process.env.COORDINATOR_STATE?.trim() || "Ekiti";
+const LGA = process.env.COORDINATOR_LGA?.trim() || "Ekiti South-West";
+const WARD = process.env.COORDINATOR_WARD?.trim() || "Ward 01";
 
 export const ADMIN_ROLES: Record<ScopeLevel, AdminRole> = {
   national: {
@@ -77,7 +79,7 @@ export const ADMIN_ROLES: Record<ScopeLevel, AdminRole> = {
     jurisdiction: "National",
     chip: "SA",
     scope: { level: "national" },
-    tagline: `All states · ${num(MEMBERS.length)} members`,
+    tagline: "Every state, LGA and ward · full movement",
   },
   state: {
     key: "state",
@@ -85,10 +87,10 @@ export const ADMIN_ROLES: Record<ScopeLevel, AdminRole> = {
     password: "StateCoord",
     title: "State Coordinator",
     roleName: "State",
-    jurisdiction: `${TOP_STATE} State`,
+    jurisdiction: `${STATE} State`,
     chip: "SC",
-    scope: { level: "state", state: TOP_STATE },
-    tagline: `${LGAS_IN_STATE} LGAs · ${num(STATE_MEMBERS.length)} members`,
+    scope: { level: "state", state: STATE },
+    tagline: `${STATE} State chapter`,
   },
   lga: {
     key: "lga",
@@ -96,10 +98,10 @@ export const ADMIN_ROLES: Record<ScopeLevel, AdminRole> = {
     password: "LGACoord",
     title: "LGA Coordinator",
     roleName: "LGA",
-    jurisdiction: `${TOP_LGA} LGA`,
+    jurisdiction: `${LGA} LGA`,
     chip: "LC",
-    scope: { level: "lga", state: TOP_STATE, lga: TOP_LGA },
-    tagline: `${TOP_STATE} State · ${num(LGA_MEMBERS.length)} members`,
+    scope: { level: "lga", state: STATE, lga: LGA },
+    tagline: `${STATE} State · ${LGA} LGA`,
   },
   ward: {
     key: "ward",
@@ -107,10 +109,10 @@ export const ADMIN_ROLES: Record<ScopeLevel, AdminRole> = {
     password: "WardCaptain",
     title: "Ward Captain",
     roleName: "Ward",
-    jurisdiction: `${TOP_WARD}, ${TOP_LGA}`,
+    jurisdiction: `${WARD}, ${LGA}`,
     chip: "WC",
-    scope: { level: "ward", state: TOP_STATE, lga: TOP_LGA, ward: TOP_WARD },
-    tagline: `${TOP_LGA} LGA · ${num(WARD_MEMBERS.length)} members`,
+    scope: { level: "ward", state: STATE, lga: LGA, ward: WARD },
+    tagline: `${LGA} LGA · ${WARD}`,
   },
 };
 

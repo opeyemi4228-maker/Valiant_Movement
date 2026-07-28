@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowUpRight,
   BadgeCheck,
@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Clock,
   Download,
+  Loader2,
   MapPin,
   Plus,
   ShieldCheck,
@@ -15,57 +16,155 @@ import {
   Users,
   Video,
 } from "lucide-react";
-import { MEMBERS, type Member } from "@/data/mock-members";
-import { scopeMembers, type AdminRole } from "@/data/admin-roles";
+import { getAdminMembers, exportAdminMembersCsv, type AdminMemberRow } from "@/app/actions/admin";
+import type { AdminRole } from "@/data/admin-roles";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ROLE_LABEL: Record<NonNullable<AdminMemberRow["communityRole"]>, string> = {
+  owner: "Coordinator",
+  admin: "Co-Coordinator",
+  moderator: "Delegate",
+  member: "Member",
+};
+
+interface DashboardData {
+  total: number; active: number; inactive: number; pendingVerify: number; verified: number; states: number;
+  buckets: { label: string; key: string; value: number }[];
+  newThisMonth: number; newThisWeek: number; verifiedThisWeek: number;
+  recent: AdminMemberRow[]; coordinators: AdminMemberRow[];
+  byState: [string, number][];
+  verifiedPct: number; activePct: number;
+}
 
 function initials(name: string) {
   return name.split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 }
 
+function downloadCsv(csv: string, filename: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Every Insights/Reports sidebar leaf that used to render nothing at all —
+ *  now each one drills into a focused slice of the same real data instead of
+ *  always showing the same "At a glance" overview regardless of what was
+ *  clicked. */
+const INSIGHT_VIEWS = new Set([
+  "New members this month",
+  "Verification rate",
+  "Active vs inactive",
+  "Weekly summary",
+  "State coverage",
+]);
+
 export function DashboardOverview({
   role,
+  view,
   onViewMembers,
   onOpenMeetings,
 }: {
   role?: AdminRole;
+  view?: string;
   onViewMembers?: () => void;
   onOpenMeetings?: () => void;
 }) {
   const scoped = role && role.scope.level !== "national";
-  const data = useMemo(() => {
-    const members = role ? scopeMembers(role.scope) : MEMBERS;
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [members, setMembers] = useState<AdminMemberRow[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const attempt = (n: number) => {
+      getAdminMembers()
+        .then((res) => {
+          if (!alive) return;
+          if (!res) {
+            if (n < 4) { setTimeout(() => { if (alive) attempt(n + 1); }, 800 * (n + 1)); return; }
+            setState("error");
+            return;
+          }
+          setMembers(res.items);
+          setState("ready");
+        })
+        .catch(() => {
+          if (!alive) return;
+          if (n < 4) setTimeout(() => { if (alive) attempt(n + 1); }, 800 * (n + 1));
+          else setState("error");
+        });
+    };
+    attempt(0);
+    return () => { alive = false; };
+  }, []);
+
+  const data: DashboardData = useMemo(() => {
     const total = members.length;
     const active = members.filter((m) => m.status === "active").length;
-    const pendingVerify = members.filter((m) => !m.ninVerified).length;
+    const inactive = total - active;
+    const pendingVerify = members.filter((m) => !m.verified).length;
     const verified = total - pendingVerify;
     const states = new Set(members.map((m) => m.state)).size;
+    const now = new Date();
 
-    // last 7 months growth (relative to Jun 2026)
+    // last 7 months growth
     const buckets: { label: string; key: string; value: number }[] = [];
     for (let k = 6; k >= 0; k--) {
-      const d = new Date(2026, 5 - k, 1);
+      const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       buckets.push({ label: MONTHS[d.getMonth()], key, value: 0 });
     }
     for (const m of members) {
-      const b = buckets.find((x) => m.joined.startsWith(x.key));
+      const key = m.joinedAt.slice(0, 7);
+      const b = buckets.find((x) => x.key === key);
       if (b) b.value++;
     }
     const newThisMonth = buckets[buckets.length - 1].value;
 
-    const recent = [...members].sort((a, b) => (a.joined < b.joined ? 1 : -1)).slice(0, 5);
-    const coordinators = members.filter((m) => m.role !== "Member").slice(0, 5);
+    const sevenDaysAgo = Date.now() - 7 * 86_400_000;
+    const newThisWeek = members.filter((m) => new Date(m.joinedAt).getTime() >= sevenDaysAgo).length;
+    const verifiedThisWeek = members.filter(
+      (m) => m.verified && new Date(m.joinedAt).getTime() >= sevenDaysAgo,
+    ).length;
+
+    const recent = [...members].sort((a, b) => (a.joinedAt < b.joinedAt ? 1 : -1)).slice(0, 8);
+    const coordinators = members.filter((m) => m.communityRole && m.communityRole !== "member").slice(0, 8);
+    const byState = new Map<string, number>();
+    for (const m of members) byState.set(m.state, (byState.get(m.state) ?? 0) + 1);
 
     return {
-      total, active, pendingVerify, verified, states,
-      buckets, newThisMonth, recent, coordinators,
+      total, active, inactive, pendingVerify, verified, states,
+      buckets, newThisMonth, newThisWeek, verifiedThisWeek, recent, coordinators,
+      byState: [...byState.entries()].sort((a, b) => b[1] - a[1]),
       verifiedPct: total ? Math.round((verified / total) * 100) : 0,
       activePct: total ? Math.round((active / total) * 100) : 0,
     };
-  }, [role]);
+  }, [members]);
+
+  if (state === "loading") {
+    return (
+      <div className="grid h-64 place-items-center">
+        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+      </div>
+    );
+  }
+  if (state === "error") {
+    return (
+      <div className="grid h-64 place-items-center rounded-2xl border border-dashed border-[var(--color-line)] bg-white text-center">
+        <p className="text-sm text-[var(--color-muted)]">Couldn&apos;t load the dashboard — check your connection and reload.</p>
+      </div>
+    );
+  }
+
+  if (view && INSIGHT_VIEWS.has(view)) {
+    return <InsightDetail view={view} role={role} data={data} onBack={() => onViewMembers?.()} />;
+  }
 
   return (
     <div className="space-y-6">
@@ -91,10 +190,6 @@ export function DashboardOverview({
           >
             <Plus className="h-4 w-4" />
             Add member
-          </button>
-          <button className="flex h-10 items-center gap-2 rounded-xl border border-[var(--color-line)] bg-white px-4 text-sm font-medium text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]">
-            <Download className="h-4 w-4" />
-            Export
           </button>
         </div>
       </div>
@@ -144,12 +239,111 @@ export function DashboardOverview({
   );
 }
 
+/* --------------------------- Insight/report drill-ins --------------------------- */
+
+function InsightDetail({
+  view, role, data, onBack,
+}: {
+  view: string;
+  role?: AdminRole;
+  data: DashboardData;
+  onBack: () => void;
+}) {
+  const [exporting, setExporting] = useState(false);
+
+  async function exportWeek() {
+    setExporting(true);
+    const to = new Date().toISOString().slice(0, 10);
+    const from = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+    const res = await exportAdminMembersCsv(from, to);
+    setExporting(false);
+    if (res.ok && res.csv && res.filename) downloadCsv(res.csv, res.filename);
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <button onClick={onBack} className="text-xs font-semibold text-[var(--color-brand-strong)] hover:underline">
+            ← Back to dashboard
+          </button>
+          <h2 className="mt-1 text-xl font-bold tracking-tight text-[var(--color-navy)]">{view}</h2>
+        </div>
+        {(view === "Weekly summary" || view === "New members this month") && (
+          <button
+            onClick={exportWeek}
+            disabled={exporting}
+            className="flex h-10 items-center gap-2 rounded-xl border border-[var(--color-line)] bg-white px-4 text-sm font-medium text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)] disabled:opacity-60"
+          >
+            {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+            Export list
+          </button>
+        )}
+      </div>
+
+      {view === "New members this month" && (
+        <div className="grid gap-5 xl:grid-cols-3">
+          <GrowthChart buckets={data.buckets} className="xl:col-span-2" />
+          <StatCard label="New this month" value={data.newThisMonth} icon={<Users className="h-4 w-4" />} trend={`${data.newThisWeek} in the last 7 days`} />
+        </div>
+      )}
+
+      {view === "Verification rate" && (
+        <div className="grid gap-5 xl:grid-cols-3">
+          <VerificationDonut verified={data.verified} pending={data.pendingVerify} pct={data.verifiedPct} />
+          <StatCard label="Verified this week" value={data.verifiedThisWeek} icon={<BadgeCheck className="h-4 w-4" />} trend="Newly NIN-verified in 7 days" />
+          <StatCard label="Awaiting NIN" value={data.pendingVerify} icon={<Clock className="h-4 w-4" />} trend={`${100 - data.verifiedPct}% of members`} />
+        </div>
+      )}
+
+      {view === "Active vs inactive" && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <StatCard highlight label="Active" value={data.active} icon={<ShieldCheck className="h-4 w-4" />} trend={`${data.activePct}% of members`} />
+          <StatCard label="Inactive / suspended" value={data.inactive} icon={<Clock className="h-4 w-4" />} trend={`${100 - data.activePct}% of members`} />
+        </div>
+      )}
+
+      {view === "Weekly summary" && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard highlight label="New members" value={data.newThisWeek} icon={<Users className="h-4 w-4" />} trend="Last 7 days" />
+          <StatCard label="Newly verified" value={data.verifiedThisWeek} icon={<BadgeCheck className="h-4 w-4" />} trend="Last 7 days" />
+          <StatCard label={role?.scope.level === "national" ? "States covered" : "Jurisdiction"} value={role?.scope.level === "national" ? data.states : role?.jurisdiction ?? "—"} icon={<MapPin className="h-4 w-4" />} trend={role?.tagline ?? ""} />
+        </div>
+      )}
+
+      {view === "State coverage" && (
+        <div className="rounded-2xl border border-[var(--color-line)] bg-white p-5">
+          <h3 className="mb-3 text-base font-bold text-[var(--color-navy)]">Members by state</h3>
+          {data.byState.length === 0 ? (
+            <p className="text-sm text-[var(--color-muted)]">No members yet.</p>
+          ) : (
+            <div className="space-y-2.5">
+              {data.byState.map(([state, count]) => (
+                <div key={state} className="flex items-center gap-3">
+                  <span className="w-32 shrink-0 truncate text-sm font-medium text-[var(--color-ink-soft)]">{state}</span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--color-line)]">
+                    <div
+                      className="h-full rounded-full gradient-brand"
+                      style={{ width: `${(count / data.byState[0][1]) * 100}%` }}
+                    />
+                  </div>
+                  <span className="w-10 shrink-0 text-right text-sm font-bold text-[var(--color-navy)]">{count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ------------------------------- Pieces ------------------------------- */
 
 function StatCard({
   label, value, icon, trend, highlight = false,
 }: {
-  label: string; value: number; icon: React.ReactNode; trend: string; highlight?: boolean;
+  label: string; value: number | string; icon: React.ReactNode; trend: string; highlight?: boolean;
 }) {
   if (highlight) {
     return (
@@ -285,7 +479,7 @@ function VerificationDonut({
   );
 }
 
-function RecentMembers({ members, onViewAll }: { members: Member[]; onViewAll?: () => void }) {
+function RecentMembers({ members, onViewAll }: { members: AdminMemberRow[]; onViewAll?: () => void }) {
   return (
     <div className="rounded-2xl border border-[var(--color-line)] bg-white p-5 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
@@ -295,6 +489,7 @@ function RecentMembers({ members, onViewAll }: { members: Member[]; onViewAll?: 
         </button>
       </div>
       <div className="space-y-1">
+        {members.length === 0 && <p className="px-2 py-4 text-sm text-[var(--color-muted)]">No members yet.</p>}
         {members.map((m) => (
           <div key={m.id} className="flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-[var(--color-surface-2)]">
             <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[var(--color-brand-tint)] text-xs font-bold text-[var(--color-brand-strong)]">
@@ -304,7 +499,7 @@ function RecentMembers({ members, onViewAll }: { members: Member[]; onViewAll?: 
               <div className="truncate text-sm font-medium text-[var(--color-ink)]">{m.name}</div>
               <div className="truncate text-xs text-[var(--color-faint)]">{m.state} · {m.lga}</div>
             </div>
-            {m.ninVerified ? (
+            {m.verified ? (
               <BadgeCheck className="h-4 w-4 shrink-0 text-[var(--color-green)]" />
             ) : (
               <Clock className="h-4 w-4 shrink-0 text-[var(--color-faint)]" />
@@ -317,20 +512,22 @@ function RecentMembers({ members, onViewAll }: { members: Member[]; onViewAll?: 
 }
 
 const ROLE_STYLES: Record<string, string> = {
-  "National Exec": "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]",
-  "State Coordinator": "bg-[var(--color-green)]/12 text-[var(--color-green)]",
-  "LGA Coordinator": "bg-[#3b9dff]/12 text-[#2b7fd4]",
-  "Ward Coordinator": "bg-[var(--color-amber)]/15 text-[#a96a00]",
+  owner: "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]",
+  admin: "bg-[var(--color-green)]/12 text-[var(--color-green)]",
+  moderator: "bg-[var(--color-amber)]/15 text-[#a96a00]",
 };
 
-function Coordinators({ members }: { members: Member[] }) {
+function Coordinators({ members }: { members: AdminMemberRow[] }) {
   return (
     <div className="rounded-2xl border border-[var(--color-line)] bg-white p-5 shadow-sm">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-base font-bold text-[var(--color-navy)]">Leadership</h3>
-        <span className="text-xs text-[var(--color-faint)]">Coordinators</span>
+        <span className="text-xs text-[var(--color-faint)]">Coordinators &amp; delegates</span>
       </div>
       <div className="space-y-1">
+        {members.length === 0 && (
+          <p className="px-2 py-4 text-sm text-[var(--color-muted)]">No coordinators or delegates appointed yet.</p>
+        )}
         {members.map((m) => (
           <div key={m.id} className="flex items-center gap-3 rounded-xl px-2 py-2 transition hover:bg-[var(--color-surface-2)]">
             <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[var(--color-navy)] text-xs font-bold text-white">
@@ -340,8 +537,8 @@ function Coordinators({ members }: { members: Member[] }) {
               <div className="truncate text-sm font-medium text-[var(--color-ink)]">{m.name}</div>
               <div className="truncate text-xs text-[var(--color-faint)]">{m.state}</div>
             </div>
-            <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${ROLE_STYLES[m.role] ?? "bg-[var(--color-line-soft)] text-[var(--color-muted)]"}`}>
-              {m.role}
+            <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${m.communityRole ? ROLE_STYLES[m.communityRole] ?? "bg-[var(--color-line-soft)] text-[var(--color-muted)]" : ""}`}>
+              {m.communityRole ? ROLE_LABEL[m.communityRole] : ""}
             </span>
           </div>
         ))}
