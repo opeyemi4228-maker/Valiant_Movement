@@ -31,30 +31,37 @@ const LEVEL_META: Record<ChapterLevel, { icon: typeof Landmark; unit: string; un
 };
 
 /** Sidebar labels that mean "top of the tree" rather than a specific state. */
-const ROOT_LABELS = new Set(["National HQ", "State chapters", "LGA & ward units", "Associations", "At a glance", "Overview"]);
+const ROOT_LABELS = new Set(["National HQ", "State chapters", "Associations", "At a glance", "Overview"]);
+/** Sidebar label that opens the flat LGA performance board. */
+const LGA_BOARD_LABEL = "LGA & ward units";
 
 export function Associations({ focus }: { focus?: string } = {}) {
   const [path, setPath] = useState<ChapterPath>({});
   const [data, setData] = useState<ChaptersResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
+  const [boardMode, setBoardMode] = useState(false);
 
-  const load = useCallback((p: ChapterPath) => {
+  const load = useCallback((p: ChapterPath, board?: "lgas") => {
     setLoading(true);
-    getChapters(p).then((res) => {
+    setBoardMode(!!board);
+    getChapters(p, board).then((res) => {
       setData(res);
       if (res.view) setPath(res.view.path); // adopt the scope-clamped path
       setLoading(false);
     });
   }, []);
 
-  // Driven by the coordinator sidebar: "National HQ" (or the section root)
-  // jumps to the top; a state name drills straight into that chapter. The
-  // dashboard's own breadcrumb/drill still works independently below.
+  // Driven by the coordinator sidebar: "National HQ" jumps to the top; a state
+  // name drills into that chapter; "LGA & ward units" opens the LGA
+  // performance board. The dashboard's own breadcrumb/drill still works below.
   useEffect(() => {
     const f = focus ?? "";
-    const p: ChapterPath = !f || ROOT_LABELS.has(f) ? {} : { stateName: f };
-    const id = setTimeout(() => { setQuery(""); load(p); }, 0); // after paint
+    const id = setTimeout(() => {
+      setQuery("");
+      if (f === LGA_BOARD_LABEL) load({}, "lgas");
+      else load(!f || ROOT_LABELS.has(f) ? {} : { stateName: f });
+    }, 0); // after paint
     return () => clearTimeout(id);
   }, [focus, load]);
 
@@ -64,26 +71,38 @@ export function Associations({ focus }: { focus?: string } = {}) {
   const filtered = useMemo(() => {
     if (!view) return [];
     const q = query.trim().toLowerCase();
-    return q ? view.rows.filter((r) => r.name.toLowerCase().includes(q)) : view.rows;
+    return q
+      ? view.rows.filter((r) => r.name.toLowerCase().includes(q) || r.sub?.toLowerCase().includes(q))
+      : view.rows;
   }, [view, query]);
 
   const maxCount = view?.rows.reduce((m, r) => Math.max(m, r.count), 0) ?? 0;
 
   function drill(row: ChapterRow) {
-    if (!row.drillable || !view) return;
+    if (!row.drillable) return;
+    setQuery("");
+    // Board rows carry an explicit target (their state can't be inferred);
+    // tree rows derive the next path from the current level.
+    if (row.to) { load(row.to); return; }
+    if (!view) return;
     const next: ChapterPath =
       view.level === "states"
         ? { stateName: row.name }
         : view.level === "lgas"
         ? { ...path, lgaName: row.name }
         : { ...path, ward: row.name };
-    setQuery("");
     load(next);
   }
 
   /* ----------------------------- breadcrumb ----------------------------- */
   const crumbs = useMemo(() => {
     const root = data?.root ?? {};
+    if (boardMode) {
+      const out: { label: string; target: ChapterPath; current: boolean }[] = [];
+      if (!root.stateName) out.push({ label: "All states", target: {}, current: false });
+      out.push({ label: "LGA & ward units", target: {}, current: true });
+      return out;
+    }
     const filled = [path.stateName, path.lgaName, path.ward];
     const currentDepth = filled.filter(Boolean).length;
     const homeDepth = [root.stateName, root.lgaName, root.ward].filter(Boolean).length;
@@ -101,24 +120,28 @@ export function Associations({ focus }: { focus?: string } = {}) {
       });
     }
     return out;
-  }, [path, data]);
+  }, [path, data, boardMode]);
 
-  const heading =
-    view?.level === "states"
-      ? "State chapters"
-      : view?.level === "lgas"
-      ? `${path.stateName} State`
-      : view?.level === "wards"
-      ? `${path.lgaName} LGA`
-      : path.ward ?? "Chapter";
-  const subheading =
-    view?.level === "states"
-      ? "Membership across every state of the federation"
-      : view?.level === "lgas"
-      ? "Local government areas"
-      : view?.level === "wards"
-      ? "Wards"
-      : "Polling units";
+  const heading = boardMode
+    ? path.stateName
+      ? `${path.stateName} — LGA performance`
+      : "LGA performance"
+    : view?.level === "states"
+    ? "State chapters"
+    : view?.level === "lgas"
+    ? `${path.stateName} State`
+    : view?.level === "wards"
+    ? `${path.lgaName} LGA`
+    : path.ward ?? "Chapter";
+  const subheading = boardMode
+    ? "Local governments ranked by membership"
+    : view?.level === "states"
+    ? "Membership across every state of the federation"
+    : view?.level === "lgas"
+    ? "Local government areas"
+    : view?.level === "wards"
+    ? "Wards"
+    : "Polling units";
 
   return (
     <div className="mx-auto w-full max-w-5xl">
@@ -279,7 +302,10 @@ function ChapterRowView({
       <span className="w-6 shrink-0 text-center text-[13px] font-bold text-[var(--color-faint)]">{rank}</span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-3">
-          <span className="truncate text-[15px] font-semibold text-[var(--color-ink)]">{row.name}</span>
+          <span className="min-w-0 truncate text-[15px] font-semibold text-[var(--color-ink)]">
+            {row.name}
+            {row.sub && <span className="ml-1.5 text-[12px] font-medium text-[var(--color-faint)]">· {row.sub}</span>}
+          </span>
           <span className="flex shrink-0 items-center gap-1.5 text-[13px] font-bold text-[var(--color-ink)]">
             <Users className="h-3.5 w-3.5 text-[var(--color-faint)]" /> {fmt(row.count)}
           </span>

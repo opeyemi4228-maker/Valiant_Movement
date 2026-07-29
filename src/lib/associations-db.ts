@@ -23,6 +23,11 @@ export interface ChapterRow {
   name: string;
   count: number;
   drillable: boolean;
+  /** Explicit drill target (used by the flat LGA board, where a row's state
+   *  can't be inferred from the current path). */
+  to?: ChapterPath;
+  /** Secondary label, e.g. the LGA's state on the national board. */
+  sub?: string;
 }
 
 export interface ChapterPath {
@@ -133,4 +138,47 @@ export async function chapterView(path: ChapterPath): Promise<ChapterView> {
     rows.map((r) => ({ key: r.name ?? "", name: r.name ?? "—", count: r.count, drillable: false })),
     { stateName: path.stateName, lgaName: path.lgaName, ward: path.ward },
   );
+}
+
+/**
+ * LGA performance board — every LGA ranked by membership (most active first),
+ * flattened across the jurisdiction. National sees all LGAs with members
+ * nationwide (each tagged with its state); a state coordinator sees only their
+ * own state's LGAs. Rows drill into that LGA's wards.
+ */
+export async function lgaBoard(stateName?: string): Promise<ChapterView> {
+  const stateId = stateName ? await stateIdByName(stateName) : null;
+  const rows = await db
+    .select({
+      lga: lgas.name,
+      state: states.name,
+      count: sql<number>`count(${profiles.userId})::int`,
+    })
+    .from(lgas)
+    .innerJoin(states, eq(states.id, lgas.stateId))
+    .leftJoin(profiles, eq(profiles.lgaId, lgas.id))
+    .where(stateId ? eq(lgas.stateId, stateId) : sql`true`)
+    .groupBy(lgas.id, lgas.name, states.name)
+    .orderBy(desc(sql`count(${profiles.userId})`), asc(lgas.name));
+
+  // "Performance" = active chapters. Show LGAs with members; if none yet, show
+  // the first slice so the board isn't blank on a fresh deployment.
+  const active = rows.filter((r) => r.count > 0);
+  const list = (active.length ? active : rows.slice(0, 50)).map((r) => ({
+    key: `${r.state}/${r.lga}`,
+    name: r.lga,
+    sub: stateName ? undefined : r.state,
+    count: r.count,
+    drillable: true,
+    to: { stateName: r.state, lgaName: r.lga } as ChapterPath,
+  }));
+
+  return {
+    level: "lgas",
+    rows: list,
+    total: list.reduce((s, r) => s + r.count, 0),
+    units: list.length,
+    populated: list.filter((r) => r.count > 0).length,
+    path: stateName ? { stateName } : {},
+  };
 }
