@@ -72,7 +72,23 @@ function downloadCsv(csv: string, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; jurisdiction?: string } = {}) {
+const RECENT_WINDOW_MS = 30 * 86_400_000; // "Recently joined" = last 30 days
+
+/** Sidebar labels that mean "no extra filter, show everyone" — anything else
+ *  either matches a known segment (Verification queue, Roles & coordinators,
+ *  Recently joined, Active) or is treated as a specific state name from the
+ *  "By state" dropdown. */
+const NO_FILTER_VIEWS = new Set(["All members", "Directory", "Segments", ""]);
+
+export function MembersDatabase({
+  scope,
+  jurisdiction,
+  view,
+}: {
+  scope?: AdminScope;
+  jurisdiction?: string;
+  view?: string;
+} = {}) {
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [items, setItems] = useState<AdminMemberRow[]>([]);
   const [communityId, setCommunityId] = useState<string | null>(null);
@@ -115,14 +131,24 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const recentCutoff = new Date().getTime() - RECENT_WINDOW_MS;
     return items.filter((m) => {
       if (q && !(m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q) || (m.phone ?? "").includes(q)))
         return false;
       if (statusFilter && m.status !== statusFilter) return false;
       if (roleFilter && m.communityRole !== roleFilter) return false;
+      // Sidebar-driven segment — each link actually changes what's shown now.
+      if (view && !NO_FILTER_VIEWS.has(view)) {
+        if (view === "Verification queue") { if (m.verified) return false; }
+        else if (view === "Roles & coordinators") { if (!m.communityRole || m.communityRole === "member") return false; }
+        else if (view === "Recently joined") { if (new Date(m.joinedAt).getTime() < recentCutoff) return false; }
+        else if (view === "Active") { if (m.status !== "active") return false; }
+        // Otherwise `view` is a specific state name from "By state".
+        else if (m.state !== view) return false;
+      }
       return true;
     });
-  }, [items, query, statusFilter, roleFilter]);
+  }, [items, query, statusFilter, roleFilter, view]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pageCount - 1);
@@ -136,6 +162,17 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
   }, [items]);
 
   const resetPage = () => setPage(0);
+
+  // Jumping to a different sidebar segment (or state) should land on page 1
+  // of that new, differently-filtered list, not wherever the old one was.
+  // Adjusted during render (not in an effect) — the React-recommended pattern
+  // for resetting state when a prop changes; safe because it bails out after
+  // one extra render instead of looping.
+  const [prevView, setPrevView] = useState(view);
+  if (view !== prevView) {
+    setPrevView(view);
+    setPage(0);
+  }
 
   async function onSetRole(memberId: string, role: "owner" | "admin" | "moderator" | "member") {
     if (!communityId) return;
@@ -192,7 +229,9 @@ export function MembersDatabase({ scope, jurisdiction }: { scope?: AdminScope; j
         {/* Toolbar */}
         <div className="flex flex-col gap-3 border-b border-[var(--color-line)] p-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="text-lg font-bold text-[var(--color-navy)]">Members database</h2>
+            <h2 className="text-lg font-bold text-[var(--color-navy)]">
+              {view && !NO_FILTER_VIEWS.has(view) ? view : "Members database"}
+            </h2>
             <p className="text-sm text-[var(--color-muted)]">
               {filtered.length} {filtered.length === 1 ? "result" : "results"}
             </p>

@@ -175,12 +175,19 @@ function getAdminContent(active: string, chapters?: string[]): SidebarContent {
         {
           title: "Segments",
           items: [
-            {
-              icon: i(Folder),
-              label: "By state",
-              hasDropdown: true,
-              children: [{ label: "Lagos" }, { label: "Kano" }, { label: "Rivers" }, { label: "FCT - Abuja" }],
-            },
+            // Only shown with more than one state to choose from — a scoped
+            // (state/LGA/ward) coordinator has exactly one and filtering by
+            // it would just repeat "All members", so it's hidden for them.
+            ...(chapters && chapters.length > 1
+              ? [
+                  {
+                    icon: i(Folder),
+                    label: "By state",
+                    hasDropdown: true,
+                    children: chapters.map((s) => ({ label: s })),
+                  },
+                ]
+              : []),
             { icon: i(Time), label: "Recently joined" },
             { icon: i(CheckmarkOutline), label: "Active" },
           ],
@@ -337,16 +344,34 @@ function IconNavButton({
   return (
     <button
       type="button"
-      title={label}
+      aria-label={label}
       onClick={onClick}
-      className={`grid size-10 min-w-10 place-items-center rounded-lg transition-colors duration-300 ${
+      className={`group relative grid size-10 min-w-10 place-items-center rounded-lg transition-colors duration-300 ${
         isActive
           ? "bg-[#f7931e]/15 text-[#f7931e]"
           : "text-neutral-400 hover:bg-white/5 hover:text-neutral-200"
       }`}
     >
       {children}
+      {label && <RailTooltip label={label} />}
     </button>
+  );
+}
+
+/** Custom hover tooltip for icon-only nav buttons — replaces the native
+ *  `title` attribute, which is unstyled, slow to appear, and (per the
+ *  screenshot that prompted this) can render clipped at a narrow viewport
+ *  edge. Positioned off to the side so it's never clipped by the rail's own
+ *  width, and appears instantly on hover instead of after the OS delay. */
+function RailTooltip({ label }: { label: string }) {
+  return (
+    <span
+      role="tooltip"
+      className="pointer-events-none absolute left-full top-1/2 z-50 ml-3 -translate-y-1/2 whitespace-nowrap rounded-lg bg-[#1c1710] px-2.5 py-1.5 text-xs font-semibold text-white opacity-0 shadow-xl ring-1 ring-white/10 transition-opacity duration-150 group-hover:opacity-100"
+    >
+      {label}
+      <span className="absolute right-full top-1/2 -translate-y-1/2 border-[5px] border-transparent border-r-[#1c1710]" />
+    </span>
   );
 }
 
@@ -472,8 +497,9 @@ function MenuItem({
     <div className={`shrink-0 ${isCollapsed ? "flex w-full justify-center" : "w-full"}`}>
       <div
         onClick={handleClick}
-        title={isCollapsed ? item.label : undefined}
-        className={`relative flex cursor-pointer items-center rounded-lg transition-colors duration-300 ${
+        role="button"
+        aria-label={isCollapsed ? item.label : undefined}
+        className={`group relative flex cursor-pointer items-center rounded-lg transition-colors duration-300 ${
           active ? "bg-[#f7931e]/15" : "hover:bg-white/5"
         } ${isCollapsed ? "size-10 min-w-10 justify-center" : "h-10 w-full px-3"}`}
       >
@@ -481,6 +507,7 @@ function MenuItem({
           <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-[#f7931e]" />
         )}
         <div className="grid size-6 shrink-0 place-items-center">{item.icon}</div>
+        {isCollapsed && <RailTooltip label={item.label} />}
         <div className={`flex-1 overflow-hidden transition-opacity duration-300 ${isCollapsed ? "w-0 opacity-0" : "ml-2 opacity-100"}`}>
           <div className={`truncate text-[14px] ${active ? "font-medium text-[#f7931e]" : "text-neutral-100"}`}>
             {item.label}

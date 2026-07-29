@@ -196,7 +196,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
               onOpenMeetings={() => changeSection("meetings")}
             />
           ) : section === "members" ? (
-            <MembersDatabase scope={role.scope} jurisdiction={role.jurisdiction} />
+            <MembersDatabase scope={role.scope} jurisdiction={role.jurisdiction} view={view} />
           ) : section === "community" ? (
             <AdminCommunity view={view} onViewChange={setView} role={role} />
           ) : section === "finance" ? (

@@ -1,9 +1,21 @@
 "use server";
 
-import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { db } from "@/db";
-import { communities, communityMembers, identities, lgas, profiles, states, users } from "@/db/schema";
+import {
+  communities,
+  communityMembers,
+  identities,
+  lgas,
+  memberReports,
+  posts,
+  profiles,
+  states,
+  users,
+} from "@/db/schema";
 import { getAdminSession } from "@/lib/admin-auth";
+import { listPosts } from "@/lib/feed-db";
+import type { FeedPost } from "@/lib/feed-types";
 import { withRetry } from "@/lib/retry";
 import {
   communityMemberList,
@@ -70,6 +82,74 @@ function scopeConditions(scope: AdminScope) {
   if (scope.lga) conditions.push(eq(lgas.name, scope.lga));
   if (scope.ward) conditions.push(eq(profiles.ward, scope.ward));
   return conditions;
+}
+
+/* ---------------------- Community feed monitor ---------------------- */
+
+export interface CommunityMonitorStats {
+  communities: number;
+  members: number;
+  online: number; // active in the last 5 minutes
+  postsToday: number;
+  openReports: number; // moderation queue
+}
+
+export interface CommunityMonitor {
+  ok: boolean;
+  stats?: CommunityMonitorStats;
+  /** The real member feed — the exact posts members see, newest first. */
+  posts?: FeedPost[];
+  error?: boolean;
+}
+
+/** A well-formed UUID that matches no user, so listPosts' reaction lookups
+ *  come back empty (an admin monitor has no "liked/bookmarked" state). */
+const MONITOR_VIEWER = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Live health of the whole community for the Feed monitor — real counts and
+ * the actual member feed, in sync with what members see. Movement-wide (this
+ * is the "watch everything" panel; per-jurisdiction breakdowns live in
+ * Associations / Members). Never throws — a transient failure returns
+ * { ok:false, error:true } so the client can show a retry state.
+ */
+export async function getCommunityMonitor(): Promise<CommunityMonitor> {
+  const role = await requireAdminRole();
+  if (!role) return { ok: false };
+
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const onlineSince = new Date(Date.now() - 5 * 60 * 1000);
+
+  try {
+    const [stats, feed] = await Promise.all([
+      withRetry(async () => {
+        const [[c], [m], [on], [pt], [rep]] = await Promise.all([
+          db.select({ n: count() }).from(communities),
+          db.select({ n: count() }).from(users),
+          db.select({ n: count() }).from(users).where(gte(users.lastActiveAt, onlineSince)),
+          db
+            .select({ n: count() })
+            .from(posts)
+            .where(and(isNull(posts.parentId), gte(posts.createdAt, startOfDay))),
+          db.select({ n: count() }).from(memberReports).where(eq(memberReports.status, "open")),
+        ]);
+        return {
+          communities: c.n,
+          members: m.n,
+          online: on.n,
+          postsToday: pt.n,
+          openReports: rep.n,
+        };
+      }),
+      withRetry(() => listPosts(MONITOR_VIEWER, 20)),
+    ]);
+
+    return { ok: true, stats, posts: feed };
+  } catch (err) {
+    console.error("getCommunityMonitor failed:", err);
+    return { ok: false, error: true };
+  }
 }
 
 /** Every real member in the caller's jurisdiction, with their role in that

@@ -21,16 +21,21 @@ import {
   Trash2,
   ArrowUpRight,
   Activity,
-  BadgeCheck,
   ShieldCheck,
   Loader2,
   ChevronRight,
   X,
 } from "lucide-react";
-import { communities, posts, type Community } from "@/data/community";
+import { communities, type Community } from "@/data/community";
 import { conversations } from "@/data/chat";
-import { getAllCommunitiesAdmin, getCommunityRosterAdmin } from "@/app/actions/admin";
+import {
+  getAllCommunitiesAdmin,
+  getCommunityRosterAdmin,
+  getCommunityMonitor,
+  type CommunityMonitorStats,
+} from "@/app/actions/admin";
 import type { CommunityDTO, CommunityMemberDTO } from "@/lib/communities";
+import type { FeedPost } from "@/lib/feed-types";
 import type { AdminRole } from "@/data/admin-roles";
 import { Avatar } from "@/components/community/Avatar";
 
@@ -38,6 +43,15 @@ function fmt(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
   return String(n);
+}
+
+/** Short relative time for feed timestamps ("2m", "3h", "5d"). */
+function ago(iso: string) {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }
 
 type AdminStatus = "Active" | "Pending" | "Flagged";
@@ -124,10 +138,28 @@ export function AdminCommunity({
   role?: AdminRole;
 }) {
   const isNational = role?.scope.level === "national";
-  const totalMembers = communities.reduce((s, c) => s + c.members, 0);
-  const totalOnline = communities.reduce((s, c) => s + c.online, 0);
-  const flagged = communities.filter((c, i) => adminMeta(c, i).status === "Flagged");
   const pending = communities.filter((c, i) => adminMeta(c, i).status === "Pending");
+
+  // Live movement health + the real member feed — refreshed on a light poll so
+  // the monitor stays in sync with what members are doing right now.
+  const [stats, setStats] = useState<CommunityMonitorStats | null>(null);
+  const [feed, setFeed] = useState<FeedPost[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const pull = async () => {
+      const res = await getCommunityMonitor();
+      if (alive && res.ok) {
+        setStats(res.stats ?? null);
+        setFeed(res.posts ?? []);
+      }
+    };
+    pull();
+    const timer = setInterval(pull, 15000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   // "By scope" children render the Communities table (filtered) and highlight that tab.
   const scopeFilter = SCOPE_VIEWS[view];
@@ -162,25 +194,25 @@ export function AdminCommunity({
         <StatCard
           highlight
           icon={<Globe2 className="h-5 w-5" />}
-          value={String(communities.length)}
+          value={stats ? fmt(stats.communities) : "—"}
           label="Communities"
           sub="Across the federation"
         />
         <StatCard
           icon={<Users className="h-5 w-5" />}
-          value={fmt(totalMembers)}
+          value={stats ? fmt(stats.members) : "—"}
           label="Total members"
-          sub={`${fmt(totalOnline)} online now`}
+          sub={stats ? `${fmt(stats.online)} online now` : "live"}
         />
         <StatCard
           icon={<MessageSquare className="h-5 w-5" />}
-          value="12.4K"
+          value={stats ? fmt(stats.postsToday) : "—"}
           label="Posts today"
-          sub="+18% vs yesterday"
+          sub="Since midnight"
         />
         <StatCard
           icon={<Flag className="h-5 w-5" />}
-          value={String(flagged.length + 2)}
+          value={stats ? fmt(stats.openReports) : "—"}
           label="Needs review"
           sub={`${pending.length} pending approval`}
           danger
@@ -196,7 +228,7 @@ export function AdminCommunity({
             <CommunitiesTable scopeFilter={scopeFilter} scopeLabel={scopeFilter ? view : undefined} />
           )
         )}
-        {activeTab === "Feed monitor" && <FeedMonitor />}
+        {activeTab === "Feed monitor" && <FeedMonitor posts={feed} />}
         {activeTab === "Group messaging" && <GroupMessaging />}
         {activeTab === "Flagged content" && <Moderation />}
         {activeTab === "Pending approval" && <PendingApproval />}
@@ -582,34 +614,56 @@ function CommunitiesTable({
 
 /* ----------------------------- Feed monitor ----------------------------- */
 
-function FeedMonitor() {
+function FeedMonitor({ posts }: { posts: FeedPost[] | null }) {
+  if (posts === null) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="h-28 animate-pulse rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)]" />
+        ))}
+      </div>
+    );
+  }
+  if (posts.length === 0) {
+    return (
+      <div className="mx-auto max-w-3xl rounded-2xl border border-dashed border-[var(--color-line)] bg-white p-10 text-center">
+        <p className="text-sm text-[var(--color-muted)]">No posts in the feed yet. Member posts will appear here live.</p>
+      </div>
+    );
+  }
   return (
     <div className="mx-auto max-w-3xl space-y-3">
       {posts.map((p) => (
           <div key={p.id} className="rounded-2xl border border-[var(--color-line)] bg-white p-4">
             <div className="flex items-start gap-3">
               <span
-                className="grid size-9 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
-                style={{ backgroundColor: p.author.color }}
+                className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full text-sm font-bold text-white"
+                style={{ backgroundColor: p.authorColor }}
               >
-                {p.author.name.split(" ").map((w) => w[0]).slice(0, 2).join("")}
+                {p.authorPhoto ? (
+                  <img src={p.authorPhoto} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  p.authorName.split(" ").map((w) => w[0]).slice(0, 2).join("")
+                )}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 text-sm">
-                  <span className="font-bold text-[var(--color-ink)]">{p.author.name}</span>
-                  {p.author.verified && <BadgeCheck className="h-3.5 w-3.5 text-[var(--color-brand)]" />}
-                  <span className="text-[var(--color-faint)]">· {p.time}</span>
+                  <span className="font-bold text-[var(--color-ink)]">{p.authorName}</span>
+                  <span className="text-[var(--color-faint)]">· {ago(p.at)}</span>
                   {p.community && (
                     <span className="ml-1 truncate rounded-full bg-[var(--color-brand-tint)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-brand-strong)]">
                       {p.community}
                     </span>
                   )}
                 </div>
-                <p className="mt-1.5 text-sm leading-relaxed text-[var(--color-ink-soft)]">{p.text}</p>
+                {p.text && <p className="mt-1.5 text-sm leading-relaxed text-[var(--color-ink-soft)]">{p.text}</p>}
+                {p.image && (
+                  <img src={p.image} alt="" className="mt-2 max-h-72 w-full rounded-xl border border-[var(--color-line)] object-cover" />
+                )}
                 <div className="mt-2.5 flex items-center gap-4 text-xs text-[var(--color-faint)]">
                   <span className="flex items-center gap-1"><Heart className="h-3.5 w-3.5" /> {fmt(p.likes)}</span>
                   <span className="flex items-center gap-1"><Repeat2 className="h-3.5 w-3.5" /> {fmt(p.reposts)}</span>
-                  <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" /> {fmt(p.comments)}</span>
+                  <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" /> {fmt(p.comments.length)}</span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 border-t border-[var(--color-line-soft)] pt-3">
                   <ModButton icon={<Pin className="h-3.5 w-3.5" />} label="Pin" />
