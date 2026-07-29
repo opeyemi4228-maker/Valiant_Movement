@@ -14,6 +14,10 @@ import { GatheringsManager } from "./GatheringsManager";
 import { Associations } from "./Associations";
 import { ValiantAILauncher } from "@/components/ai/ValiantAILauncher";
 import type { AdminRole } from "@/data/admin-roles";
+import { NIGERIA } from "@/data/nigeria";
+
+/** All 36 states + FCT, alphabetical — the national State-chapters sidebar list. */
+const ALL_STATES = NIGERIA.map((s) => s.name).sort((a, b) => a.localeCompare(b));
 
 const SECTION_META: Record<string, { title: string; subtitle: string }> = {
   dashboard: { title: "Dashboard", subtitle: "Movement at a glance" },
@@ -53,6 +57,11 @@ export function AdminShell({ role }: { role: AdminRole }) {
   const [view, setView] = useState<string>(DEFAULT_VIEW.dashboard);
   const [mobileNav, setMobileNav] = useState(false);
   const meta = SECTION_META[section] ?? SECTION_META.dashboard;
+
+  // The State-chapters sidebar list, scoped to the coordinator: National sees
+  // every state; a scoped coordinator sees only their own state.
+  const chapters =
+    role.scope.level === "national" ? ALL_STATES : role.scope.state ? [role.scope.state] : undefined;
 
   function changeSection(s: string) {
     setSection(s);
@@ -154,6 +163,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
             onSelect={selectItem}
             activeItem={view}
             roleLabel={role.title}
+            chapters={chapters}
             showBrand={false}
             showTitle={false}
           />
@@ -170,6 +180,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
                 onSelect={selectItem}
                 activeItem={view}
                 roleLabel={role.title}
+                chapters={chapters}
               />
             </div>
           </div>
@@ -187,7 +198,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
           ) : section === "members" ? (
             <MembersDatabase scope={role.scope} jurisdiction={role.jurisdiction} />
           ) : section === "community" ? (
-            <AdminCommunity view={view} onViewChange={setView} />
+            <AdminCommunity view={view} onViewChange={setView} role={role} />
           ) : section === "finance" ? (
             <FinanceModule view={view} onViewChange={setView} />
           ) : section === "meetings" ? (
@@ -195,7 +206,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
           ) : section === "gatherings" ? (
             <GatheringsManager role={role} />
           ) : section === "associations" ? (
-            <Associations />
+            <Associations focus={view} />
           ) : (
             <Placeholder title={meta.title} subtitle={meta.subtitle} />
           )}

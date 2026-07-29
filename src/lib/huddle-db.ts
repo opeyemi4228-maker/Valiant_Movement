@@ -151,6 +151,14 @@ export async function startOrJoinHuddle(
   let liveMode = live?.mode ?? mode;
   const startedBy = live?.startedBy ?? userId;
 
+  // Starting a NEW huddle is a coordinator action (owner/admin — appointed via
+  // the admin dashboard) or a delegate they've named (moderator). Anyone can
+  // still JOIN a huddle someone else already started — this only gates who's
+  // allowed to kick one off in the first place.
+  if (!huddleId && membership.role === "member") {
+    return { ok: false, error: "Only your community's coordinator (or someone they've delegated) can start a huddle." };
+  }
+
   if (!huddleId) {
     const [h] = await db
       .insert(huddles)

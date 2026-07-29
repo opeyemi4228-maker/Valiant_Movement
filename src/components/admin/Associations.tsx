@@ -30,7 +30,10 @@ const LEVEL_META: Record<ChapterLevel, { icon: typeof Landmark; unit: string; un
   pollingUnits: { icon: Vote, unit: "Polling unit", units: "Polling units", color: "var(--color-green)" },
 };
 
-export function Associations() {
+/** Sidebar labels that mean "top of the tree" rather than a specific state. */
+const ROOT_LABELS = new Set(["National HQ", "State chapters", "LGA & ward units", "Associations", "At a glance", "Overview"]);
+
+export function Associations({ focus }: { focus?: string } = {}) {
   const [path, setPath] = useState<ChapterPath>({});
   const [data, setData] = useState<ChaptersResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -45,10 +48,15 @@ export function Associations() {
     });
   }, []);
 
+  // Driven by the coordinator sidebar: "National HQ" (or the section root)
+  // jumps to the top; a state name drills straight into that chapter. The
+  // dashboard's own breadcrumb/drill still works independently below.
   useEffect(() => {
-    const id = setTimeout(() => load({}), 0); // after paint — no sync setState in the effect body
+    const f = focus ?? "";
+    const p: ChapterPath = !f || ROOT_LABELS.has(f) ? {} : { stateName: f };
+    const id = setTimeout(() => { setQuery(""); load(p); }, 0); // after paint
     return () => clearTimeout(id);
-  }, [load]);
+  }, [focus, load]);
 
   const view = data?.view ?? null;
   const meta = view ? LEVEL_META[view.level] : LEVEL_META.states;

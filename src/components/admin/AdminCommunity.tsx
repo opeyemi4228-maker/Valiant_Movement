@@ -23,9 +23,16 @@ import {
   Activity,
   BadgeCheck,
   ShieldCheck,
+  Loader2,
+  ChevronRight,
+  X,
 } from "lucide-react";
 import { communities, posts, type Community } from "@/data/community";
 import { conversations } from "@/data/chat";
+import { getAllCommunitiesAdmin, getCommunityRosterAdmin } from "@/app/actions/admin";
+import type { CommunityDTO, CommunityMemberDTO } from "@/lib/communities";
+import type { AdminRole } from "@/data/admin-roles";
+import { Avatar } from "@/components/community/Avatar";
 
 function fmt(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
@@ -110,10 +117,13 @@ const SCOPE_VIEWS: Record<string, Community["scope"][]> = {
 export function AdminCommunity({
   view,
   onViewChange,
+  role,
 }: {
   view: string;
   onViewChange: (v: string) => void;
+  role?: AdminRole;
 }) {
+  const isNational = role?.scope.level === "national";
   const totalMembers = communities.reduce((s, c) => s + c.members, 0);
   const totalOnline = communities.reduce((s, c) => s + c.online, 0);
   const flagged = communities.filter((c, i) => adminMeta(c, i).status === "Flagged");
@@ -180,7 +190,11 @@ export function AdminCommunity({
       <div className="mt-5">
         {activeTab === "Overview" && <Overview onNavigate={onViewChange} />}
         {activeTab === "Communities" && (
-          <CommunitiesTable scopeFilter={scopeFilter} scopeLabel={scopeFilter ? view : undefined} />
+          isNational ? (
+            <NationalCommunitiesTable />
+          ) : (
+            <CommunitiesTable scopeFilter={scopeFilter} scopeLabel={scopeFilter ? view : undefined} />
+          )
         )}
         {activeTab === "Feed monitor" && <FeedMonitor />}
         {activeTab === "Group messaging" && <GroupMessaging />}
@@ -291,6 +305,190 @@ function Overview({ onNavigate }: { onNavigate: (v: string) => void }) {
               </div>
             </button>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------- National: real communities ------------------------- */
+
+const COLORS = ["#e07400", "#1faa59", "#7c3aed", "#0ea5e9", "#e23d4e", "#f5a524", "#0d9488", "#db2777"];
+function colorFor(id: string): string {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return COLORS[h % COLORS.length];
+}
+
+const SCOPE_LABEL: Record<CommunityDTO["scope"], string> = {
+  national: "National",
+  state: "State chapter",
+  lga: "LGA group",
+  ward: "Ward group",
+  polling_unit: "Polling unit",
+  interest: "Interest group",
+};
+
+/** Real communities, nationwide — the national admin's own list, with a
+ *  drill-in to any single community's real roster. Previously there was no
+ *  way to see or enter a specific community's real membership at all. */
+function NationalCommunitiesTable() {
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [items, setItems] = useState<CommunityDTO[]>([]);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState<CommunityDTO | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getAllCommunitiesAdmin()
+      .then((res) => { if (alive) { setItems(res); setState("ready"); } })
+      .catch(() => { if (alive) setState("error"); });
+    return () => { alive = false; };
+  }, []);
+
+  const rows = items.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
+
+  if (state === "loading") {
+    return (
+      <div className="grid h-48 place-items-center">
+        <Loader2 className="h-5 w-5 animate-spin text-[var(--color-brand)]" />
+      </div>
+    );
+  }
+  if (state === "error") {
+    return <p className="rounded-2xl border border-dashed border-[var(--color-line)] bg-white p-8 text-center text-sm text-[var(--color-muted)]">Couldn&apos;t load communities — reload to try again.</p>;
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white">
+      {open && <NationalCommunityRoster community={open} onClose={() => setOpen(null)} />}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-line)] p-4">
+        <h3 className="font-bold text-[var(--color-navy)]">Every community in the movement</h3>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search communities…"
+            className="h-9 w-60 rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-2)] pl-9 pr-3 text-sm outline-none transition focus:border-[var(--color-brand)] focus:bg-white focus:ring-4 focus:ring-[var(--color-brand)]/12"
+          />
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[680px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-[var(--color-line)] text-[11px] uppercase tracking-wide text-[var(--color-faint)]">
+              <th className="px-4 py-3 font-semibold">Community</th>
+              <th className="px-4 py-3 font-semibold">Scope</th>
+              <th className="px-4 py-3 font-semibold">Members</th>
+              <th className="px-4 py-3 font-semibold">Administered by</th>
+              <th className="px-4 py-3 font-semibold text-right">Enter</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((c) => (
+              <tr key={c.id} className="border-b border-[var(--color-line-soft)] transition hover:bg-[var(--color-surface-2)]">
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="grid size-9 shrink-0 place-items-center rounded-lg text-xs font-bold text-white"
+                      style={{ backgroundColor: colorFor(c.id) }}
+                    >
+                      <Globe2 className="h-4 w-4" />
+                    </span>
+                    <div className="truncate font-semibold text-[var(--color-ink)]">{c.name}</div>
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <span className="inline-flex items-center rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-xs font-medium text-[var(--color-ink-soft)]">
+                    {SCOPE_LABEL[c.scope]}
+                  </span>
+                </td>
+                <td className="px-4 py-3 font-medium text-[var(--color-ink-soft)]">{fmt(c.memberCount)}</td>
+                <td className="px-4 py-3 text-[var(--color-muted)]">{c.controlledBy}</td>
+                <td className="px-4 py-3 text-right">
+                  <button
+                    onClick={() => setOpen(c)}
+                    className="ml-auto flex items-center gap-1 rounded-lg border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
+                  >
+                    Enter <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-12 text-center text-sm text-[var(--color-muted)]">
+                  No communities match your search.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function NationalCommunityRoster({ community, onClose }: { community: CommunityDTO; onClose: () => void }) {
+  const [members, setMembers] = useState<CommunityMemberDTO[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getCommunityRosterAdmin(community.id).then((m) => { if (alive) setMembers(m ?? []); });
+    return () => { alive = false; };
+  }, [community.id]);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end justify-center sm:items-center">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl">
+        <div className="flex items-start gap-3 border-b border-[var(--color-line)] p-4">
+          <span
+            className="grid size-10 shrink-0 place-items-center rounded-xl text-white"
+            style={{ backgroundColor: colorFor(community.id) }}
+          >
+            <Globe2 className="h-5 w-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate font-bold text-[var(--color-navy)]">{community.name}</h3>
+            <p className="text-xs text-[var(--color-muted)]">
+              {fmt(community.memberCount)} member{community.memberCount === 1 ? "" : "s"} · {community.controlledBy}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="grid size-8 shrink-0 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          {!members ? (
+            <div className="grid place-items-center py-10">
+              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-brand)]" />
+            </div>
+          ) : members.length === 0 ? (
+            <p className="py-10 text-center text-sm text-[var(--color-muted)]">No members yet.</p>
+          ) : (
+            members.map((m) => (
+              <div key={m.id} className="flex items-center gap-3 rounded-xl p-2.5 transition hover:bg-[var(--color-surface-2)]">
+                <Avatar name={m.name} color={colorFor(m.id)} photo={m.avatar ?? undefined} size={38} />
+                <div className="min-w-0 flex-1 leading-tight">
+                  <div className="truncate text-sm font-semibold text-[var(--color-ink)]">{m.name}</div>
+                  <div className="text-xs text-[var(--color-faint)]">
+                    Joined {new Date(m.joinedAt).toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" })}
+                  </div>
+                </div>
+                {m.role !== "member" && (
+                  <span className="shrink-0 rounded-full bg-[var(--color-brand-tint)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--color-brand-strong)]">
+                    {m.role}
+                  </span>
+                )}
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

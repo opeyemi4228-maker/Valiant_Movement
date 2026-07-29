@@ -123,7 +123,7 @@ const i = (Icon: React.ElementType, active = false) => (
   <Icon size={16} className={active ? "text-[#f7931e]" : "text-neutral-300"} />
 );
 
-function getAdminContent(active: string): SidebarContent {
+function getAdminContent(active: string, chapters?: string[]): SidebarContent {
   const map: Record<string, SidebarContent> = {
     dashboard: {
       title: "Dashboard",
@@ -268,7 +268,9 @@ function getAdminContent(active: string): SidebarContent {
               icon: i(Folder),
               label: "State chapters",
               hasDropdown: true,
-              children: [{ label: "Lagos" }, { label: "Kano" }, { label: "Rivers" }],
+              children: (chapters && chapters.length ? chapters : ["Lagos", "Kano", "Rivers"]).map((s) => ({
+                label: s,
+              })),
             },
             { icon: i(Folder), label: "LGA & ward units" },
           ],
@@ -583,6 +585,7 @@ function DetailSidebar({
   showTitle = true,
   activeItem,
   roleLabel,
+  chapters,
 }: {
   activeSection: string;
   onSelect?: (label: string) => void;
@@ -590,10 +593,11 @@ function DetailSidebar({
   showTitle?: boolean;
   activeItem?: string;
   roleLabel?: string;
+  chapters?: string[];
 }) {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const content = getAdminContent(activeSection);
+  const content = getAdminContent(activeSection, chapters);
 
   const toggleExpanded = (key: string) =>
     setExpandedItems((prev) => {
@@ -645,6 +649,7 @@ export function AdminSidebar({
   showTitle = true,
   activeItem,
   roleLabel,
+  chapters,
 }: {
   activeSection: string;
   onSectionChange: (s: string) => void;
@@ -653,6 +658,7 @@ export function AdminSidebar({
   showTitle?: boolean;
   activeItem?: string;
   roleLabel?: string;
+  chapters?: string[];
 }) {
   return (
     <div className="flex h-full flex-row">
@@ -668,6 +674,7 @@ export function AdminSidebar({
         showTitle={showTitle}
         activeItem={activeItem}
         roleLabel={roleLabel}
+        chapters={chapters}
       />
     </div>
   );

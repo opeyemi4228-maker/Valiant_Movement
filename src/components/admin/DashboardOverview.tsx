@@ -127,7 +127,7 @@ export function DashboardOverview({
     }
     const newThisMonth = buckets[buckets.length - 1].value;
 
-    const sevenDaysAgo = Date.now() - 7 * 86_400_000;
+    const sevenDaysAgo = now.getTime() - 7 * 86_400_000;
     const newThisWeek = members.filter((m) => new Date(m.joinedAt).getTime() >= sevenDaysAgo).length;
     const verifiedThisWeek = members.filter(
       (m) => m.verified && new Date(m.joinedAt).getTime() >= sevenDaysAgo,
