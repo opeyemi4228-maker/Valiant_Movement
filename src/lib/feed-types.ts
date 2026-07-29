@@ -26,4 +26,9 @@ export interface FeedPost {
   reposted: boolean;
   bookmarked: boolean;
   comments: FeedComment[];
+  /** Coordinator moderation state (surfaced to the admin Feed monitor; the
+   *  member feed never shows hidden posts and ignores these flags). */
+  pinned?: boolean;
+  hidden?: boolean;
+  flagged?: boolean;
 }

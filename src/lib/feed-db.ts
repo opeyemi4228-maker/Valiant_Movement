@@ -42,6 +42,9 @@ const postSelect = {
   likeCount: posts.likeCount,
   replyCount: posts.replyCount,
   repostCount: posts.repostCount,
+  pinnedAt: posts.pinnedAt,
+  hiddenAt: posts.hiddenAt,
+  flaggedAt: posts.flaggedAt,
   createdAt: posts.createdAt,
   ...authorSelect,
 };
@@ -109,14 +112,21 @@ export async function getPostDTO(meId: string, postId: string): Promise<FeedPost
 }
 
 /** Top-level feed, newest first, with the viewer's like/repost state. */
-export async function listPosts(meId: string, limit = 100): Promise<FeedPost[]> {
+export async function listPosts(
+  meId: string,
+  limit = 100,
+  opts?: { includeHidden?: boolean },
+): Promise<FeedPost[]> {
   const rows = await db
     .select(postSelect)
     .from(posts)
     .innerJoin(users, eq(users.id, posts.authorId))
     .leftJoin(profiles, eq(profiles.userId, posts.authorId))
-    .where(isNull(posts.parentId))
-    .orderBy(desc(posts.createdAt), desc(posts.id))
+    // Top-level posts only; hidden posts are dropped from the member feed but
+    // kept for the admin monitor (so a coordinator can un-hide them).
+    .where(and(isNull(posts.parentId), opts?.includeHidden ? undefined : isNull(posts.hiddenAt)))
+    // Pinned posts float to the top of everyone's feed, newest pin first.
+    .orderBy(sql`${posts.pinnedAt} desc nulls last`, desc(posts.createdAt), desc(posts.id))
     .limit(limit);
 
   if (rows.length === 0) return [];
@@ -180,6 +190,9 @@ export async function listPosts(meId: string, limit = 100): Promise<FeedPost[]> 
       reposted: reposted.has(r.id),
       bookmarked: bookmarked.has(r.id),
       comments: commentsByPost.get(r.id) ?? [],
+      pinned: !!r.pinnedAt,
+      hidden: !!r.hiddenAt,
+      flagged: !!r.flaggedAt,
     };
   });
 }

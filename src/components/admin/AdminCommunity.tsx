@@ -32,6 +32,7 @@ import {
   getAllCommunitiesAdmin,
   getCommunityRosterAdmin,
   getCommunityMonitor,
+  moderatePost,
   type CommunityMonitorStats,
 } from "@/app/actions/admin";
 import type { CommunityDTO, CommunityMemberDTO } from "@/lib/communities";
@@ -161,6 +162,20 @@ export function AdminCommunity({
     };
   }, []);
 
+  // Apply a moderation action, then reflect the DB's returned state optimistically
+  // (the next poll re-confirms it). Hiding a post here removes it from members' feeds.
+  async function moderate(postId: string, action: "pin" | "hide" | "flag") {
+    const res = await moderatePost(postId, action);
+    if (!res.ok) return;
+    setFeed((prev) =>
+      prev
+        ? prev.map((p) =>
+            p.id === postId ? { ...p, pinned: res.pinned, hidden: res.hidden, flagged: res.flagged } : p,
+          )
+        : prev,
+    );
+  }
+
   // "By scope" children render the Communities table (filtered) and highlight that tab.
   const scopeFilter = SCOPE_VIEWS[view];
   const activeTab: (typeof TABS)[number] = scopeFilter
@@ -212,7 +227,7 @@ export function AdminCommunity({
         />
         <StatCard
           icon={<Flag className="h-5 w-5" />}
-          value={stats ? fmt(stats.openReports) : "—"}
+          value={stats ? fmt(stats.needsReview) : "—"}
           label="Needs review"
           sub={`${pending.length} pending approval`}
           danger
@@ -228,7 +243,7 @@ export function AdminCommunity({
             <CommunitiesTable scopeFilter={scopeFilter} scopeLabel={scopeFilter ? view : undefined} />
           )
         )}
-        {activeTab === "Feed monitor" && <FeedMonitor posts={feed} />}
+        {activeTab === "Feed monitor" && <FeedMonitor posts={feed} onModerate={moderate} />}
         {activeTab === "Group messaging" && <GroupMessaging />}
         {activeTab === "Flagged content" && <Moderation />}
         {activeTab === "Pending approval" && <PendingApproval />}
@@ -614,7 +629,13 @@ function CommunitiesTable({
 
 /* ----------------------------- Feed monitor ----------------------------- */
 
-function FeedMonitor({ posts }: { posts: FeedPost[] | null }) {
+function FeedMonitor({
+  posts,
+  onModerate,
+}: {
+  posts: FeedPost[] | null;
+  onModerate: (postId: string, action: "pin" | "hide" | "flag") => void | Promise<void>;
+}) {
   if (posts === null) {
     return (
       <div className="mx-auto max-w-3xl space-y-3">
@@ -634,7 +655,12 @@ function FeedMonitor({ posts }: { posts: FeedPost[] | null }) {
   return (
     <div className="mx-auto max-w-3xl space-y-3">
       {posts.map((p) => (
-          <div key={p.id} className="rounded-2xl border border-[var(--color-line)] bg-white p-4">
+          <div
+            key={p.id}
+            className={`rounded-2xl border bg-white p-4 transition ${
+              p.flagged ? "border-[var(--color-red)]/40" : "border-[var(--color-line)]"
+            } ${p.hidden ? "opacity-55" : ""}`}
+          >
             <div className="flex items-start gap-3">
               <span
                 className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full text-sm font-bold text-white"
@@ -647,12 +673,27 @@ function FeedMonitor({ posts }: { posts: FeedPost[] | null }) {
                 )}
               </span>
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 text-sm">
+                <div className="flex flex-wrap items-center gap-1.5 text-sm">
                   <span className="font-bold text-[var(--color-ink)]">{p.authorName}</span>
                   <span className="text-[var(--color-faint)]">· {ago(p.at)}</span>
                   {p.community && (
                     <span className="ml-1 truncate rounded-full bg-[var(--color-brand-tint)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-brand-strong)]">
                       {p.community}
+                    </span>
+                  )}
+                  {p.pinned && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-brand-tint)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-brand-strong)]">
+                      <Pin className="h-3 w-3" /> Pinned
+                    </span>
+                  )}
+                  {p.flagged && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-red)]/12 px-2 py-0.5 text-[11px] font-semibold text-[var(--color-red)]">
+                      <ShieldAlert className="h-3 w-3" /> Flagged
+                    </span>
+                  )}
+                  {p.hidden && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[11px] font-semibold text-[var(--color-muted)]">
+                      <EyeOff className="h-3 w-3" /> Hidden from feed
                     </span>
                   )}
                 </div>
@@ -666,9 +707,25 @@ function FeedMonitor({ posts }: { posts: FeedPost[] | null }) {
                   <span className="flex items-center gap-1"><MessageCircle className="h-3.5 w-3.5" /> {fmt(p.comments.length)}</span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2 border-t border-[var(--color-line-soft)] pt-3">
-                  <ModButton icon={<Pin className="h-3.5 w-3.5" />} label="Pin" />
-                  <ModButton icon={<EyeOff className="h-3.5 w-3.5" />} label="Hide" />
-                  <ModButton icon={<ShieldAlert className="h-3.5 w-3.5" />} label="Flag" danger />
+                  <ModButton
+                    icon={<Pin className="h-3.5 w-3.5" />}
+                    label={p.pinned ? "Unpin" : "Pin"}
+                    active={p.pinned}
+                    onClick={() => onModerate(p.id, "pin")}
+                  />
+                  <ModButton
+                    icon={<EyeOff className="h-3.5 w-3.5" />}
+                    label={p.hidden ? "Unhide" : "Hide"}
+                    active={p.hidden}
+                    onClick={() => onModerate(p.id, "hide")}
+                  />
+                  <ModButton
+                    icon={<ShieldAlert className="h-3.5 w-3.5" />}
+                    label={p.flagged ? "Unflag" : "Flag"}
+                    active={p.flagged}
+                    onClick={() => onModerate(p.id, "flag")}
+                    danger
+                  />
                 </div>
               </div>
             </div>
@@ -917,16 +974,44 @@ function StatusPill({ status, reports }: { status: AdminStatus; reports?: number
   );
 }
 
-function ModButton({ icon, label, danger }: { icon: React.ReactNode; label: string; danger?: boolean }) {
+function ModButton({
+  icon,
+  label,
+  danger,
+  active,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  danger?: boolean;
+  active?: boolean;
+  onClick?: () => void | Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  async function handle() {
+    if (!onClick || busy) return;
+    setBusy(true);
+    try {
+      await onClick();
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
     <button
-      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${
-        danger
+      onClick={handle}
+      disabled={busy}
+      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${
+        active
+          ? danger
+            ? "border-[var(--color-danger)] bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
+            : "border-[var(--color-brand)] bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
+          : danger
           ? "border-[var(--color-danger)]/30 text-[var(--color-danger)] hover:bg-[var(--color-danger)]/8"
           : "border-[var(--color-line)] text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
       }`}
     >
-      {icon}
+      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon}
       {label}
     </button>
   );

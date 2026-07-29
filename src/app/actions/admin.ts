@@ -1,6 +1,6 @@
 "use server";
 
-import { and, count, desc, eq, gte, isNull, lte } from "drizzle-orm";
+import { and, count, desc, eq, gte, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   communities,
@@ -91,7 +91,7 @@ export interface CommunityMonitorStats {
   members: number;
   online: number; // active in the last 5 minutes
   postsToday: number;
-  openReports: number; // moderation queue
+  needsReview: number; // open member reports + flagged posts
 }
 
 export interface CommunityMonitor {
@@ -124,7 +124,7 @@ export async function getCommunityMonitor(): Promise<CommunityMonitor> {
   try {
     const [stats, feed] = await Promise.all([
       withRetry(async () => {
-        const [[c], [m], [on], [pt], [rep]] = await Promise.all([
+        const [[c], [m], [on], [pt], [rep], [fp]] = await Promise.all([
           db.select({ n: count() }).from(communities),
           db.select({ n: count() }).from(users),
           db.select({ n: count() }).from(users).where(gte(users.lastActiveAt, onlineSince)),
@@ -133,22 +133,73 @@ export async function getCommunityMonitor(): Promise<CommunityMonitor> {
             .from(posts)
             .where(and(isNull(posts.parentId), gte(posts.createdAt, startOfDay))),
           db.select({ n: count() }).from(memberReports).where(eq(memberReports.status, "open")),
+          db.select({ n: count() }).from(posts).where(isNotNull(posts.flaggedAt)),
         ]);
         return {
           communities: c.n,
           members: m.n,
           online: on.n,
           postsToday: pt.n,
-          openReports: rep.n,
+          needsReview: rep.n + fp.n,
         };
       }),
-      withRetry(() => listPosts(MONITOR_VIEWER, 20)),
+      // includeHidden: the monitor shows hidden posts too, so a coordinator can
+      // reverse a hide. Members never see them (listPosts excludes by default).
+      withRetry(() => listPosts(MONITOR_VIEWER, 20, { includeHidden: true })),
     ]);
 
     return { ok: true, stats, posts: feed };
   } catch (err) {
     console.error("getCommunityMonitor failed:", err);
     return { ok: false, error: true };
+  }
+}
+
+export interface ModerationResult {
+  ok: boolean;
+  pinned?: boolean;
+  hidden?: boolean;
+  flagged?: boolean;
+}
+
+/**
+ * Toggle a coordinator moderation action on a post from the Feed monitor.
+ * Each action flips its own timestamp (set → now, unset → null) in a single
+ * statement, and returns the post's resulting state so the UI reflects reality
+ * without a refetch. Hiding removes the post from every member's feed; pinning
+ * floats it to the top; flagging queues it for review.
+ */
+export async function moderatePost(
+  postId: string,
+  action: "pin" | "hide" | "flag",
+): Promise<ModerationResult> {
+  const role = await requireAdminRole();
+  if (!role) return { ok: false };
+
+  const toggle =
+    action === "pin"
+      ? { pinnedAt: sql`CASE WHEN ${posts.pinnedAt} IS NULL THEN now() ELSE NULL END` }
+      : action === "hide"
+      ? { hiddenAt: sql`CASE WHEN ${posts.hiddenAt} IS NULL THEN now() ELSE NULL END` }
+      : { flaggedAt: sql`CASE WHEN ${posts.flaggedAt} IS NULL THEN now() ELSE NULL END` };
+
+  try {
+    const [row] = await withRetry(() =>
+      db
+        .update(posts)
+        .set(toggle)
+        .where(eq(posts.id, postId))
+        .returning({
+          pinnedAt: posts.pinnedAt,
+          hiddenAt: posts.hiddenAt,
+          flaggedAt: posts.flaggedAt,
+        }),
+    );
+    if (!row) return { ok: false };
+    return { ok: true, pinned: !!row.pinnedAt, hidden: !!row.hiddenAt, flagged: !!row.flaggedAt };
+  } catch (err) {
+    console.error("moderatePost failed:", err);
+    return { ok: false };
   }
 }
 

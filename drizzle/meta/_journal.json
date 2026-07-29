@@ -64,6 +64,13 @@
       "when": 1784788866110,
       "tag": "0008_gray_firelord",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785328756944,
+      "tag": "0009_closed_ogun",
+      "breakpoints": true
     }
   ]
 }

@@ -327,6 +327,13 @@ export const posts = pgTable(
     likeCount: integer("like_count").notNull().default(0),
     replyCount: integer("reply_count").notNull().default(0),
     repostCount: integer("repost_count").notNull().default(0),
+    // Coordinator moderation — set by the admin Feed monitor. `pinnedAt` floats
+    // a post to the top of the feed; `hiddenAt` removes it from everyone's feed
+    // (soft-delete, so it's reversible); `flaggedAt` marks it for the review
+    // queue. All null = a normal, visible member post.
+    pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+    hiddenAt: timestamp("hidden_at", { withTimezone: true }),
+    flaggedAt: timestamp("flagged_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
