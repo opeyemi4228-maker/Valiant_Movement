@@ -24,6 +24,7 @@ import {
   Bookmark,
   MoreHorizontal,
   Smile,
+  Pin,
 } from "lucide-react";
 import { loadFeedBundle, publishPost, likePost, repostPost, commentPost, bookmarkPost, publishStory } from "@/app/actions/feed";
 import type { StoryDTO } from "@/lib/feed-db";
@@ -724,6 +725,11 @@ export function PostCard({
       style={{ borderLeft: `3px solid ${post.authorColor}` }}
     >
       <div className="p-4">
+        {post.pinned && (
+          <div className="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--color-brand-strong)]">
+            <Pin className="h-3.5 w-3.5" /> Pinned by coordinators
+          </div>
+        )}
         {post.reposted && (
           <div className="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--color-muted)]">
             <Repeat2 className="h-3.5 w-3.5" /> You reposted
