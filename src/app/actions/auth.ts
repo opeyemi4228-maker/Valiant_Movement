@@ -34,6 +34,7 @@ import {
   findByCredentials,
 } from "@/lib/demo-store";
 import { ensureGeoCommunities } from "@/lib/communities";
+import { ensureMemberReservedAccount } from "@/lib/wallet-db";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { createSession } from "@/lib/session";
 import { generateToken, hashNin, hashToken } from "@/lib/tokens";
@@ -173,6 +174,15 @@ export async function registerMember(
     });
   } catch (err) {
     console.warn("[registerMember] community auto-join skipped", err);
+  }
+
+  // Provision the member's dedicated (reserved) account so it's ready the
+  // moment they open their wallet. Best-effort — never blocks sign-up, and
+  // self-heals on the next wallet open if Monnify isn't reachable / keyed yet.
+  try {
+    await ensureMemberReservedAccount(userId, data.fullName, email);
+  } catch (err) {
+    console.warn("[registerMember] reserved account not provisioned at signup", err);
   }
 
   // Best-effort verification email — never blocks sign-up if email isn't configured.

@@ -177,7 +177,7 @@ export function CommunityChat({
       } finally {
         inFlight = false;
       }
-    }, 2500); // pulled back — sub-second polling was burning through the DB's data-transfer quota
+    }, 1200); // re-tightened now the Neon quota crisis is resolved on the new project
     return () => clearInterval(t);
   }, [state, conversationId, community.id, memberCount]);
 

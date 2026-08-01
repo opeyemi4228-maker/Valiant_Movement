@@ -61,7 +61,7 @@ export function Communities() {
       }
     };
     tick();
-    const t = setInterval(tick, 5000); // pulled back — reduce database data-transfer load
+    const t = setInterval(tick, 2500); // re-tightened now the Neon quota crisis is resolved on the new project
     return () => { alive = false; clearInterval(t); };
   }, []);
 

@@ -713,6 +713,7 @@ export const payments = pgTable(
 export const structureLevel = pgEnum("structure_level", ["ward", "lga", "state", "national"]);
 export const structurePaymentKind = pgEnum("structure_payment_kind", [
   "dues_share", // inflow: a member's dues share for this level
+  "deposit", // inflow: a bank transfer into the treasury's dedicated account
   "withdrawal", // outflow: Finance-authorized spend to a bank account
   "adjustment", // manual correction (audited)
 ]);

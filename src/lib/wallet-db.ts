@@ -20,6 +20,8 @@ import {
   type MembershipCategory,
   type StructureLevel,
 } from "./dues";
+import { hasMonnify } from "./env";
+import * as monnify from "./monnify";
 import type { PaymentKind, PaymentStatus } from "./wallet-types";
 
 /* ============================================================
@@ -129,24 +131,34 @@ export async function createPendingDeposit(input: {
  * Exactly-once finalize: the guarded status flip (`pending` → `completed`)
  * only succeeds for ONE caller even if the webhook and a manual status
  * check race each other; only that caller credits the wallet.
+ *
+ * The check-and-flip used to be a SELECT followed by a conditional UPDATE —
+ * two round trips before the wallet credit even started. It's now a single
+ * conditional UPDATE (matched on reference + kind + still-pending) that
+ * returns the row it flipped, so the common "first caller to confirm this
+ * deposit" path is one round trip, not two, before the credit lands — the
+ * difference the member actually feels as "did my balance update yet".
+ * A miss (0 rows) falls back to one SELECT only to explain why (not found
+ * vs. already finalized), which is the rare path.
  */
 export async function finalizeDeposit(
   reference: string,
   providerReference: string,
 ): Promise<{ ok: boolean; userId?: string; amount?: number; alreadyFinalized?: boolean }> {
-  const [existing] = await db.select().from(payments).where(eq(payments.reference, reference)).limit(1);
-  if (!existing || existing.kind !== "deposit") return { ok: false };
-  if (existing.status !== "pending") return { ok: true, alreadyFinalized: true, userId: existing.userId, amount: existing.amount };
-
   const flipped = await db
     .update(payments)
     .set({ status: "completed", providerReference, completedAt: new Date() })
-    .where(and(eq(payments.id, existing.id), eq(payments.status, "pending")))
-    .returning({ id: payments.id });
-  if (flipped.length === 0) return { ok: true, alreadyFinalized: true, userId: existing.userId, amount: existing.amount };
+    .where(and(eq(payments.reference, reference), eq(payments.kind, "deposit"), eq(payments.status, "pending")))
+    .returning({ id: payments.id, userId: payments.userId, amount: payments.amount });
+  if (flipped.length > 0) {
+    const row = flipped[0];
+    await credit(row.userId, row.amount);
+    return { ok: true, userId: row.userId, amount: row.amount };
+  }
 
-  await credit(existing.userId, existing.amount);
-  return { ok: true, userId: existing.userId, amount: existing.amount };
+  const [existing] = await db.select().from(payments).where(eq(payments.reference, reference)).limit(1);
+  if (!existing || existing.kind !== "deposit") return { ok: false };
+  return { ok: true, alreadyFinalized: true, userId: existing.userId, amount: existing.amount };
 }
 
 export async function markDepositFailed(reference: string, reason: string): Promise<void> {
@@ -490,4 +502,176 @@ export async function chargeMonthlyDues(
   // 2) Distribute (idempotent) — heals any partial prior run too.
   const shares = await distributeDues(userId, amount, monthKey, monthName, geo);
   return { ok: true, amount, category, shares, alreadyCharged };
+}
+
+/* ============================================================
+   Reserved (dedicated) accounts — a permanent NUBAN a member or a
+   treasury can be funded by ordinary bank transfer. We store the
+   reference we gave Monnify (`reservedRef`) alongside the bank
+   account(s) it returned, and credit the owner when the
+   RESERVED_ACCOUNT funding webhook arrives (creditReservedFunding).
+   Provisioning is best-effort and idempotent: it only calls Monnify
+   when a reserved account isn't already on file AND keys are set, so
+   it's safe to call on every signup and every wallet open.
+   ============================================================ */
+
+export interface ReservedAccountView {
+  accountNumber: string;
+  bankName: string;
+  bankCode: string;
+  accountName?: string;
+}
+
+function toViews(accounts: monnify.ReservedBankAccount[]): ReservedAccountView[] {
+  return accounts.map((a) => ({
+    accountNumber: a.accountNumber,
+    bankName: a.bankName,
+    bankCode: a.bankCode,
+    accountName: a.accountName,
+  }));
+}
+
+/** Ensure the member has a dedicated account, returning its bank account(s).
+ *  Returns null when it can't be provisioned yet (no Monnify keys) — the UI
+ *  shows an "activating" state and this heals on the next call once keys exist. */
+export async function ensureMemberReservedAccount(
+  userId: string,
+  name: string,
+  email: string,
+): Promise<ReservedAccountView[] | null> {
+  const [existing] = await db
+    .select({ ref: wallets.reservedRef, accounts: wallets.reservedAccounts })
+    .from(wallets)
+    .where(eq(wallets.userId, userId))
+    .limit(1);
+  // reservedRef is only ever set together with the accounts, so its presence
+  // means "already provisioned" — never re-hit Monnify (a duplicate errors).
+  if (existing?.ref) return (existing.accounts as ReservedAccountView[] | null) ?? [];
+  if (!hasMonnify()) return null;
+
+  const result = await monnify.createReservedAccount({
+    accountReference: `wallet_${userId}`,
+    accountName: name || email.split("@")[0],
+    customerEmail: email,
+    customerName: name || email.split("@")[0],
+  });
+  const accounts = toViews(result.accounts);
+  await db
+    .insert(wallets)
+    .values({ userId, reservedRef: result.accountReference, reservedAccounts: accounts })
+    .onConflictDoUpdate({
+      target: wallets.userId,
+      set: { reservedRef: result.accountReference, reservedAccounts: accounts },
+    });
+  return accounts;
+}
+
+/** Ensure a structure treasury has a dedicated account. Same contract as the
+ *  member version, keyed by the treasury's stable `structureAccounts.key`. */
+export async function ensureStructureReservedAccount(
+  accountId: string,
+  key: string,
+  name: string,
+  contactEmail: string,
+): Promise<ReservedAccountView[] | null> {
+  const [existing] = await db
+    .select({ ref: structureAccounts.reservedRef, accounts: structureAccounts.reservedAccounts })
+    .from(structureAccounts)
+    .where(eq(structureAccounts.id, accountId))
+    .limit(1);
+  if (existing?.ref) return (existing.accounts as ReservedAccountView[] | null) ?? [];
+  if (!hasMonnify()) return null;
+
+  const result = await monnify.createReservedAccount({
+    accountReference: `structure_${key}`,
+    accountName: name,
+    customerEmail: contactEmail,
+    customerName: name,
+  });
+  const accounts = toViews(result.accounts);
+  await db
+    .update(structureAccounts)
+    .set({ reservedRef: result.accountReference, reservedAccounts: accounts })
+    .where(eq(structureAccounts.id, accountId));
+  return accounts;
+}
+
+export interface ReservedFundingResult {
+  ok: boolean;
+  target?: "wallet" | "structure";
+  userId?: string;
+  amount?: number;
+  alreadyApplied?: boolean;
+}
+
+/**
+ * Credit a bank transfer into a dedicated account, matched by `accountReference`
+ * (a member wallet OR a treasury). Exactly-once: the ledger insert (idempotency
+ * key derived from the provider reference) is the gate, so a replayed webhook
+ * can't double-credit. Returns { ok:false } if the reference matches nothing.
+ */
+export async function creditReservedFunding(
+  accountReference: string,
+  providerReference: string,
+  amountNaira: number,
+): Promise<ReservedFundingResult> {
+  if (!Number.isFinite(amountNaira) || amountNaira <= 0) return { ok: false };
+  const ref = `resv_${providerReference}`;
+
+  // Member wallet?
+  const [w] = await db
+    .select({ userId: wallets.userId })
+    .from(wallets)
+    .where(eq(wallets.reservedRef, accountReference))
+    .limit(1);
+  if (w) {
+    const [ledgered] = await db
+      .insert(payments)
+      .values({
+        userId: w.userId,
+        kind: "deposit",
+        status: "completed",
+        provider: "monnify",
+        amount: amountNaira,
+        reference: ref,
+        providerReference,
+        description: "Bank transfer to dedicated account",
+        completedAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .returning({ id: payments.id });
+    if (!ledgered) return { ok: true, target: "wallet", userId: w.userId, amount: amountNaira, alreadyApplied: true };
+    await credit(w.userId, amountNaira);
+    return { ok: true, target: "wallet", userId: w.userId, amount: amountNaira };
+  }
+
+  // Structure treasury?
+  const [s] = await db
+    .select({ id: structureAccounts.id })
+    .from(structureAccounts)
+    .where(eq(structureAccounts.reservedRef, accountReference))
+    .limit(1);
+  if (s) {
+    const [ledgered] = await db
+      .insert(structurePayments)
+      .values({
+        accountId: s.id,
+        kind: "deposit",
+        status: "completed",
+        amount: amountNaira,
+        reference: ref,
+        description: "Bank transfer to dedicated account",
+        completedAt: new Date(),
+      })
+      .onConflictDoNothing()
+      .returning({ id: structurePayments.id });
+    if (!ledgered) return { ok: true, target: "structure", amount: amountNaira, alreadyApplied: true };
+    await db
+      .update(structureAccounts)
+      .set({ balance: sql`${structureAccounts.balance} + ${amountNaira}` })
+      .where(eq(structureAccounts.id, s.id));
+    return { ok: true, target: "structure", amount: amountNaira };
+  }
+
+  return { ok: false };
 }

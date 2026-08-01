@@ -193,6 +193,77 @@ export async function transferSingle(input: {
   });
 }
 
+/* --------------------------- reserved accounts ---------------------------
+   Dedicated (virtual) NUBANs. A member — or a structure treasury — gets a
+   permanent account number they can be funded by ordinary bank transfer;
+   the money arrives as a RESERVED_ACCOUNT "SUCCESSFUL_TRANSACTION" webhook,
+   matched back by our `accountReference`. `accountReference` is OUR stable id
+   for the reserved account (e.g. "wallet_<userId>"); it must be unique per
+   account and is what the webhook echoes so we know whose wallet to credit. */
+
+export interface ReservedBankAccount {
+  accountNumber: string;
+  accountName: string;
+  bankName: string;
+  bankCode: string;
+}
+
+export interface ReservedAccountResult {
+  accountReference: string;
+  reservationReference: string;
+  accounts: ReservedBankAccount[];
+}
+
+/** Provision a dedicated account. `getAllAvailableBanks` asks Monnify for a
+ *  number at every partner bank, so the holder can be given whichever they
+ *  trust. Safe to call once per account — a repeat with the same reference
+ *  errors as a duplicate, so callers guard on "already provisioned". */
+export async function createReservedAccount(input: {
+  accountReference: string;
+  accountName: string;
+  customerEmail: string;
+  customerName: string;
+}): Promise<ReservedAccountResult> {
+  const body = await authedFetch<{
+    accountReference: string;
+    reservationReference: string;
+    accounts?: ReservedBankAccount[];
+    // Older single-bank responses return flat fields instead of `accounts`.
+    accountNumber?: string;
+    accountName?: string;
+    bankName?: string;
+    bankCode?: string;
+  }>("/api/v2/bank-transfer/reserved-accounts", {
+    method: "POST",
+    body: JSON.stringify({
+      accountReference: input.accountReference,
+      accountName: input.accountName.slice(0, 100),
+      currencyCode: "NGN",
+      contractCode: env.MONNIFY_CONTRACT_CODE,
+      customerEmail: input.customerEmail,
+      customerName: input.customerName.slice(0, 100),
+      getAllAvailableBanks: true,
+    }),
+  });
+  const accounts: ReservedBankAccount[] = body.accounts?.length
+    ? body.accounts
+    : body.accountNumber
+    ? [
+        {
+          accountNumber: body.accountNumber,
+          accountName: body.accountName ?? input.accountName,
+          bankName: body.bankName ?? "",
+          bankCode: body.bankCode ?? "",
+        },
+      ]
+    : [];
+  return {
+    accountReference: body.accountReference,
+    reservationReference: body.reservationReference,
+    accounts,
+  };
+}
+
 /* ------------------------------- webhooks -------------------------------
    Monnify signs each webhook body with HMAC-SHA512 keyed by the secret key,
    sent in the `monnify-signature` header. Verify against the RAW request

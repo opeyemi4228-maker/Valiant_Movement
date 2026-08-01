@@ -1,0 +1,1 @@
+ALTER TYPE "public"."structure_payment_kind" ADD VALUE 'deposit' BEFORE 'withdrawal';

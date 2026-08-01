@@ -21,6 +21,7 @@ import {
   EyeOff,
   AlertTriangle,
   RefreshCcw,
+  Copy,
 } from "lucide-react";
 import { naira, campaigns } from "@/data/finance";
 import { ensureDuesNotifications, getDuesStatus } from "@/app/actions/finance";
@@ -83,7 +84,7 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
       refresh();
       ensureDuesNotifications().catch(() => {});
     }, 0); // after paint — no sync setState in the effect body
-    const t = setInterval(refresh, 5000); // pulled back — reduce database data-transfer load
+    const t = setInterval(refresh, 2000); // re-tightened now the Neon quota crisis is resolved on the new project
     return () => {
       clearTimeout(kick);
       clearInterval(t);
@@ -91,17 +92,45 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
   }, [refresh, active]);
 
   // Returning from a Monnify checkout redirect: verify server-side (never
-  // trust the URL itself) and clean the query string either way.
+  // trust the URL itself) and clean the query string either way. A single
+  // check used to be it — if Monnify hadn't settled yet, the member was left
+  // on "pending" until the webhook happened to land and the 5s background
+  // poll happened to catch it, which could be tens of seconds. Now a
+  // "pending" result is actively re-checked with Monnify every 1.5s (up to
+  // 20 tries, ~30s) instead of passively waiting — the balance flips the
+  // instant the gateway confirms, not on the next unrelated poll tick.
   useEffect(() => {
     const ref = searchParams.get("financeRef");
     if (!ref) return;
-    verifyDeposit(ref).then((res) => {
-      if (res.status === "paid") flash("✅ Deposit confirmed — your balance is updated.");
-      else if (res.status === "pending") flash("⏳ Deposit received — confirming with the bank, this can take a minute.");
-      else if (res.status === "failed") flash("Deposit didn't go through — no funds were taken.");
-      refresh();
-    });
+    let alive = true;
+    let tries = 0;
+    const poll = () => {
+      verifyDeposit(ref).then((res) => {
+        if (!alive) return;
+        if (res.status === "paid") {
+          flash("✅ Deposit confirmed — your balance is updated.");
+          refresh();
+          return;
+        }
+        if (res.status === "failed") {
+          flash("Deposit didn't go through — no funds were taken.");
+          refresh();
+          return;
+        }
+        tries += 1;
+        if (res.status === "pending" && tries < 20) {
+          setTimeout(poll, 1500);
+          return;
+        }
+        if (res.status === "pending") flash("⏳ Deposit received — confirming with the bank, this can take a minute.");
+        refresh();
+      });
+    };
+    poll();
     router.replace("/dashboard?tab=finance");
+    return () => {
+      alive = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
@@ -185,6 +214,16 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
             </div>
           </div>
         </div>
+
+        {/* ====================== Dedicated account ====================== */}
+        {summary && summary.reservedAccounts.length > 0 ? (
+          <ReservedAccountCard accounts={summary.reservedAccounts} onCopied={flash} />
+        ) : summary?.reservedPending ? (
+          <div className="mt-4 rounded-2xl border border-dashed border-[var(--color-line)] bg-white p-4 text-sm text-[var(--color-muted)]">
+            <span className="font-semibold text-[var(--color-ink)]">Your dedicated account is being set up.</span>{" "}
+            Refresh in a moment — you&apos;ll be able to fund your wallet by bank transfer, no card needed.
+          </div>
+        ) : null}
 
         {/* ============================== Stats ============================== */}
         <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -391,6 +430,67 @@ function TxRow({ t }: { t: PaymentDTO }) {
       >
         {isIn ? "+" : "−"} {naira(t.amount)}
       </span>
+    </div>
+  );
+}
+
+/* -------------------------- Dedicated account card -------------------------- */
+
+function ReservedAccountCard({
+  accounts,
+  onCopied,
+}: {
+  accounts: { accountNumber: string; bankName: string; bankCode: string; accountName?: string }[];
+  onCopied: (msg: string) => void;
+}) {
+  const [i, setI] = useState(0);
+  const a = accounts[Math.min(i, accounts.length - 1)];
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(a.accountNumber);
+      onCopied("✅ Account number copied");
+    } catch {
+      onCopied(a.accountNumber);
+    }
+  };
+  return (
+    <div className="mt-4 rounded-2xl border border-[var(--color-line)] bg-white p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-[13px] font-bold text-[var(--color-ink)]">
+          <Landmark className="h-4 w-4 text-[var(--color-brand-strong)]" /> Fund by bank transfer
+        </div>
+        {accounts.length > 1 && (
+          <select
+            value={i}
+            onChange={(e) => setI(Number(e.target.value))}
+            className="rounded-lg border border-[var(--color-line)] bg-white px-2 py-1 text-xs font-semibold"
+          >
+            {accounts.map((x, k) => (
+              <option key={k} value={k}>
+                {x.bankName || `Bank ${k + 1}`}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <p className="mt-1 text-xs text-[var(--color-muted)]">
+        Transfer to your own dedicated account — it credits your wallet automatically, no card needed.
+      </p>
+      <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-[var(--color-surface-2)] px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-lg font-extrabold tracking-wide text-[var(--color-ink)]">{a.accountNumber}</div>
+          <div className="truncate text-xs text-[var(--color-muted)]">
+            {a.bankName}
+            {a.accountName ? ` · ${a.accountName}` : ""}
+          </div>
+        </div>
+        <button
+          onClick={copy}
+          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--color-navy)] px-3 py-2 text-xs font-bold text-white transition hover:opacity-90 active:scale-95"
+        >
+          <Copy className="h-3.5 w-3.5" /> Copy
+        </button>
+      </div>
     </div>
   );
 }

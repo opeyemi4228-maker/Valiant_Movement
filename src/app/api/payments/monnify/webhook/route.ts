@@ -1,6 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyWebhookSignature } from "@/lib/monnify";
-import { finalizeDeposit, finalizeWithdrawalOutcome, markDepositFailed } from "@/lib/wallet-db";
+import {
+  creditReservedFunding,
+  finalizeDeposit,
+  finalizeWithdrawalOutcome,
+  markDepositFailed,
+} from "@/lib/wallet-db";
 import { notifyFinanceEvent } from "@/app/actions/finance";
 
 /**
@@ -43,7 +48,17 @@ export async function POST(request: NextRequest) {
       const reference = String(data.paymentReference ?? "");
       const providerReference = String(data.transactionReference ?? reference);
       const paymentStatus = String(data.paymentStatus ?? "").toUpperCase();
-      if (reference && (paymentStatus === "PAID" || paymentStatus === "OVERPAID")) {
+      const product = (data.product ?? {}) as { type?: string; reference?: string };
+
+      if (product.type === "RESERVED_ACCOUNT" && product.reference) {
+        // Funding a dedicated account (member wallet or treasury) by transfer —
+        // matched by our accountReference, credited exactly once.
+        const amountPaid = Number(data.amountPaid ?? 0);
+        const res = await creditReservedFunding(product.reference, providerReference, amountPaid);
+        if (res.ok && !res.alreadyApplied && res.target === "wallet" && res.amount) {
+          await notifyFinanceEvent("deposit", res.amount, "bank transfer");
+        }
+      } else if (reference && (paymentStatus === "PAID" || paymentStatus === "OVERPAID")) {
         const res = await finalizeDeposit(reference, providerReference);
         if (res.ok && !res.alreadyFinalized && res.userId && res.amount) {
           await notifyFinanceEvent("deposit", res.amount, "Monnify");

@@ -240,40 +240,48 @@ export interface CommunityChatHandle {
  *  Never throws — a rejected promise here previously left the client's
  *  un-caught `.then()` stuck on "joining…" forever with no recovery.
  *  `transient: true` tells the client to retry rather than show a
- *  permanent-looking error. */
+ *  permanent-looking error.
+ *
+ * This runs on every Communities-chat open — membership check, the
+ * community's conversation id, and its display info (name/count/scope) used
+ * to be 3 separate SELECTs (plus the seat write), even though every open
+ * community already has a conversation. They're now one combined query, so
+ * the overwhelmingly common case (already a member, conversation already
+ * exists) is just that query + the seat check (which itself no-ops in one
+ * round trip when already seated) — 2 round trips instead of 4. Only a
+ * community's very first-ever open still pays for creating the conversation. */
 export async function openCommunityChatFor(
   userId: string,
   communityId: string,
 ): Promise<{ ok: boolean; chat?: CommunityChatHandle; error?: string; transient?: boolean }> {
   try {
-    const [membership] = await withRetry(() =>
+    const [row] = await withRetry(() =>
       db
-        .select({ role: communityMembers.role })
+        .select({
+          name: communities.name,
+          memberCount: communities.memberCount,
+          scope: communities.scope,
+          conversationId: communities.conversationId,
+        })
         .from(communityMembers)
+        .innerJoin(communities, eq(communities.id, communityMembers.communityId))
         .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, userId)))
         .limit(1),
     );
-    if (!membership) return { ok: false, error: "Only members of this community can join its chat." };
+    if (!row) return { ok: false, error: "Only members of this community can join its chat." };
 
-    const conversationId = await withRetry(() => ensureCommunityConversation(communityId));
+    const conversationId = row.conversationId ?? (await withRetry(() => ensureCommunityConversation(communityId)));
     if (!conversationId) return { ok: false, error: "Community not found." };
 
     await withRetry(() => seatInConversation(conversationId, userId));
 
-    const [c] = await withRetry(() =>
-      db
-        .select({ name: communities.name, memberCount: communities.memberCount, scope: communities.scope })
-        .from(communities)
-        .where(eq(communities.id, communityId))
-        .limit(1),
-    );
     return {
       ok: true,
       chat: {
         conversationId,
-        name: c?.name ?? "Community",
-        memberCount: c?.memberCount ?? 0,
-        scope: (c?.scope as CommunityScope) ?? "interest",
+        name: row.name ?? "Community",
+        memberCount: row.memberCount ?? 0,
+        scope: (row.scope as CommunityScope) ?? "interest",
       },
     };
   } catch (err) {

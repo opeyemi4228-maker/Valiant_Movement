@@ -81,7 +81,7 @@ export function RealtimePresence() {
       }
     };
     tick();
-    const t = setInterval(tick, 2000); // pulled back — sub-second polling was burning through the DB's data-transfer quota
+    const t = setInterval(tick, 1200); // re-tightened now the Neon quota crisis is resolved on the new project
     return () => {
       alive = false;
       clearInterval(t);

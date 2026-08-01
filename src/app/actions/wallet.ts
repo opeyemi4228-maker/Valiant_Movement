@@ -29,6 +29,11 @@ export interface WalletSummary {
   withdrawalsConfigured: boolean;
   balance: number;
   payments: PaymentDTO[];
+  /** The member's dedicated bank account(s) for funding by transfer. */
+  reservedAccounts: wdb.ReservedAccountView[];
+  /** True when Monnify is connected but the dedicated account is still being
+   *  provisioned (show an "activating" state rather than a number). */
+  reservedPending: boolean;
 }
 
 async function me() {
@@ -43,16 +48,35 @@ async function me() {
 export async function getWalletSummary(): Promise<WalletSummary | null> {
   const u = await me();
   if (!u) {
-    return { available: false, monnifyConfigured: false, withdrawalsConfigured: false, balance: 0, payments: [] };
+    return {
+      available: false,
+      monnifyConfigured: false,
+      withdrawalsConfigured: false,
+      balance: 0,
+      payments: [],
+      reservedAccounts: [],
+      reservedPending: false,
+    };
   }
   try {
     const [balance, payments] = await withRetry(() => Promise.all([wdb.getBalance(u.id), wdb.listRecentPayments(u.id)]));
+    // Best-effort: provision (or read) the member's dedicated account. Never
+    // fails the summary — a Monnify hiccup just leaves it "activating".
+    let reservedAccounts: wdb.ReservedAccountView[] = [];
+    try {
+      reservedAccounts =
+        (await wdb.ensureMemberReservedAccount(u.id, u.fullName ?? "", u.email)) ?? [];
+    } catch (err) {
+      console.error("reserved-account provisioning failed (non-fatal):", err);
+    }
     return {
       available: true,
       monnifyConfigured: hasMonnify(),
       withdrawalsConfigured: hasMonnifyDisbursement(),
       balance,
       payments,
+      reservedAccounts,
+      reservedPending: hasMonnify() && reservedAccounts.length === 0,
     };
   } catch (err) {
     console.error("getWalletSummary failed (returning null so the client keeps its last-known state):", err);
