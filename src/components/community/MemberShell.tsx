@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { logout } from "@/app/actions/auth";
 import type { ActiveHuddleAlert } from "@/app/actions/realtime";
-import { ExpandableTabs } from "@/components/ui/expandable-tabs";
 import { LiveFeed } from "./LiveFeed";
 import { Communities } from "./Communities";
 import { LiveChat } from "./LiveChat";
@@ -60,11 +59,6 @@ const TITLES: Record<Tab, string> = {
  *  pill never wraps on a phone — Profile is reached via the avatar, Bookmarks
  *  via the drawer. */
 const MOBILE_NAV = NAV.slice(0, 5);
-const MOBILE_TABS = MOBILE_NAV.map((n) => ({
-  title: n.label,
-  icon: n.icon,
-  badge: n.badge,
-}));
 
 export function MemberShell({
   user,
@@ -144,14 +138,8 @@ export function MemberShell({
     window.history.replaceState(null, "", qs ? `${pathname}?${qs}` : pathname);
   }
 
-  // Keep the active tab highlighted/expanded in the bottom pill. Tabs reached
-  // elsewhere (profile, bookmarks) collapse the pill to plain icons.
+  // The active bottom-nav tab (−1 when on Profile/Bookmarks, reached elsewhere).
   const activeMobileIndex = MOBILE_NAV.findIndex((n) => n.id === tab);
-
-  function onMobileNav(index: number | null) {
-    if (index == null) return;
-    go(MOBILE_NAV[index].id);
-  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
@@ -277,23 +265,52 @@ export function MemberShell({
         {/* Mobile bottom tab bar — expandable pill that reveals the active
             label. Sits in flow so content above it is never covered, with
             safe-area padding for iOS home-indicator devices. */}
-        <div className="shrink-0 border-t border-[var(--color-line)] bg-white px-3 pt-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] lg:hidden">
-          <ExpandableTabs
-            tabs={MOBILE_TABS.map((t, i) => {
-              const id = MOBILE_NAV[i].id;
-              const badge =
-                id === "notifications" ? notifUnread
-                : id === "messages" ? messagesUnread
-                : id === "communities" ? communitiesUnread
-                : t.badge;
-              return { ...t, badge: badge || undefined };
-            })}
-            selected={activeMobileIndex >= 0 ? activeMobileIndex : null}
-            onChange={onMobileNav}
-            activeColor="text-[var(--color-brand-strong)]"
-            className="mx-auto w-fit max-w-full flex-nowrap justify-center gap-1 rounded-full border-[var(--color-line)] bg-[var(--color-surface-2)] p-1.5"
-          />
-        </div>
+        <nav className="grid shrink-0 grid-cols-5 border-t border-[var(--color-line)] bg-white pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:hidden">
+          {MOBILE_NAV.map((n, i) => {
+            const active = activeMobileIndex === i;
+            const badge =
+              n.id === "notifications" ? notifUnread
+              : n.id === "messages" ? messagesUnread
+              : n.id === "communities" ? communitiesUnread
+              : 0;
+            const Icon = n.icon;
+            return (
+              <button
+                key={n.id}
+                onClick={() => go(n.id)}
+                aria-label={n.label}
+                aria-current={active ? "page" : undefined}
+                className="relative flex min-w-0 flex-col items-center gap-1 pb-1.5 pt-2.5 transition-colors"
+              >
+                {/* active top indicator */}
+                <span
+                  className={`absolute inset-x-0 top-0 mx-auto h-0.5 w-8 rounded-full transition-colors ${
+                    active ? "bg-[var(--color-brand)]" : "bg-transparent"
+                  }`}
+                />
+                <span className="relative">
+                  <Icon
+                    size={22}
+                    strokeWidth={active ? 2.4 : 2}
+                    className={active ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"}
+                  />
+                  {badge > 0 && (
+                    <span className="absolute -right-2 -top-1.5 grid h-[16px] min-w-[16px] place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold leading-none text-white ring-2 ring-white">
+                      {badge > 9 ? "9+" : badge}
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={`max-w-full truncate text-[10px] font-semibold leading-none ${
+                    active ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"
+                  }`}
+                >
+                  {n.label}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
       </div>
 
       {/* Real-time: incoming-call ringing + new-message notifications */}
