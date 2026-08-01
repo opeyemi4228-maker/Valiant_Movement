@@ -531,6 +531,29 @@ function toViews(accounts: monnify.ReservedBankAccount[]): ReservedAccountView[]
   }));
 }
 
+/** Create a reserved account, self-healing when a prior attempt already created
+ *  it in Monnify (reference reported as a duplicate) but we never stored it —
+ *  in that case we fetch the existing account instead of failing forever. */
+async function provisionReserved(
+  accountReference: string,
+  accountName: string,
+  email: string,
+): Promise<monnify.ReservedAccountResult> {
+  try {
+    return await monnify.createReservedAccount({
+      accountReference,
+      accountName,
+      customerEmail: email,
+      customerName: accountName,
+    });
+  } catch (err) {
+    if (monnify.isDuplicateReferenceError(err)) {
+      return await monnify.getReservedAccount(accountReference);
+    }
+    throw err;
+  }
+}
+
 /** Ensure the member has a dedicated account, returning its bank account(s).
  *  Returns null when it can't be provisioned yet (no Monnify keys) — the UI
  *  shows an "activating" state and this heals on the next call once keys exist. */
@@ -549,12 +572,7 @@ export async function ensureMemberReservedAccount(
   if (existing?.ref) return (existing.accounts as ReservedAccountView[] | null) ?? [];
   if (!hasMonnify()) return null;
 
-  const result = await monnify.createReservedAccount({
-    accountReference: `wallet_${userId}`,
-    accountName: name || email.split("@")[0],
-    customerEmail: email,
-    customerName: name || email.split("@")[0],
-  });
+  const result = await provisionReserved(`wallet_${userId}`, name || email.split("@")[0], email);
   const accounts = toViews(result.accounts);
   await db
     .insert(wallets)
@@ -582,12 +600,7 @@ export async function ensureStructureReservedAccount(
   if (existing?.ref) return (existing.accounts as ReservedAccountView[] | null) ?? [];
   if (!hasMonnify()) return null;
 
-  const result = await monnify.createReservedAccount({
-    accountReference: `structure_${key}`,
-    accountName: name,
-    customerEmail: contactEmail,
-    customerName: name,
-  });
+  const result = await provisionReserved(`structure_${key}`, name, contactEmail);
   const accounts = toViews(result.accounts);
   await db
     .update(structureAccounts)

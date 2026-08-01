@@ -264,6 +264,28 @@ export async function createReservedAccount(input: {
   };
 }
 
+/** Fetch an already-created reserved account by our reference. Used to recover
+ *  when createReservedAccount reports the reference as a duplicate (the account
+ *  was created on a prior attempt but never persisted our side). */
+export async function getReservedAccount(accountReference: string): Promise<ReservedAccountResult> {
+  const body = await authedFetch<{
+    accountReference: string;
+    reservationReference: string;
+    accounts?: ReservedBankAccount[];
+  }>(`/api/v2/bank-transfer/reserved-accounts/${encodeURIComponent(accountReference)}`);
+  return {
+    accountReference: body.accountReference,
+    reservationReference: body.reservationReference,
+    accounts: body.accounts ?? [],
+  };
+}
+
+/** True when a createReservedAccount error is "this reference already exists". */
+export function isDuplicateReferenceError(err: unknown): boolean {
+  if (!(err instanceof MonnifyError)) return false;
+  return err.responseCode === "99" || /same reference|already/i.test(err.message);
+}
+
 /* ------------------------------- webhooks -------------------------------
    Monnify signs each webhook body with HMAC-SHA512 keyed by the secret key,
    sent in the `monnify-signature` header. Verify against the RAW request
