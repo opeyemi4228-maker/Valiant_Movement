@@ -31,7 +31,7 @@ export function Bookmarks({ me, active = true }: { me: { name: string; avatar?: 
     // reactivating re-fires immediately below so the list is never stale.
     if (!active) return;
     const kick = setTimeout(refresh, 0);
-    const t = setInterval(refresh, 1500); // tightened — matches the rest of the app's real-time feel
+    const t = setInterval(refresh, 6000); // pulled back — reduce database data-transfer load
     return () => { clearTimeout(kick); clearInterval(t); };
   }, [refresh, active]);
 

@@ -159,7 +159,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
     // reactivating re-fires immediately below so the view is never stale.
     if (!active) return;
     const kick = setTimeout(refresh, 0); // after paint — no sync setState in the effect
-    const t = setInterval(refresh, 300); // tightened again — matches the rest of the app's real-time feel
+    const t = setInterval(refresh, 3000); // pulled back — sub-second polling was burning through the DB's data-transfer quota
     return () => {
       clearTimeout(kick);
       clearInterval(t);

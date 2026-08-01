@@ -61,7 +61,7 @@ export function Communities() {
       }
     };
     tick();
-    const t = setInterval(tick, 1500); // matches the rest of the app's real-time feel
+    const t = setInterval(tick, 5000); // pulled back — reduce database data-transfer load
     return () => { alive = false; clearInterval(t); };
   }, []);
 

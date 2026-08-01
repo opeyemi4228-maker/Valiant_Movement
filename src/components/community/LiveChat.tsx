@@ -238,7 +238,7 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
       }
     };
     tick();
-    const t = setInterval(tick, 200); // tightened again — as fast as this architecture allows
+    const t = setInterval(tick, 2500); // pulled back — sub-second polling was burning through the DB's data-transfer quota
     return () => { alive = false; clearInterval(t); };
   }, [state, activeId, isTabActive]);
 

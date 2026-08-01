@@ -231,7 +231,7 @@ export function HuddleRoom({
             onClose();
             return;
           }
-          if (alive) pollTimer = setTimeout(pollOnce, 300);
+          if (alive) pollTimer = setTimeout(pollOnce, 500);
           return;
         }
         endedStreak = 0;
@@ -283,7 +283,7 @@ export function HuddleRoom({
             }
           } catch { /* transient signaling error — next poll retries */ }
         }
-        if (alive) pollTimer = setTimeout(pollOnce, 200);
+        if (alive) pollTimer = setTimeout(pollOnce, 1200); // pulled back from 200ms — reduce database data-transfer load
       };
       pollOnce();
     })();

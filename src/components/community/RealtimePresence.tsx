@@ -81,7 +81,7 @@ export function RealtimePresence() {
       }
     };
     tick();
-    const t = setInterval(tick, 200); // tightened again — this drives incoming-call detection too
+    const t = setInterval(tick, 2000); // pulled back — sub-second polling was burning through the DB's data-transfer quota
     return () => {
       alive = false;
       clearInterval(t);

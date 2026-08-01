@@ -4,19 +4,19 @@ import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb } from "@/lib/env";
 import { withRetry } from "@/lib/retry";
 import { notify, hasRecentNotif } from "@/lib/notify";
-import { deductDues, getBalance } from "@/lib/wallet-db";
+import { chargeMonthlyDues, getBalance, memberDuesAmount } from "@/lib/wallet-db";
 import { fmtNaira } from "@/lib/wallet-types";
 
 /* ============================================================
    Finance notifications + the monthly-dues clock: reminders
-   5,4,3,2,1 days before the due date, then a REAL deduction from
-   the member's wallet ledger on the due date itself (or an
-   insufficient-funds notice with a deposit prompt if it can't be
-   covered). Reminders dedupe to one per day; the deduction itself
-   is naturally idempotent (see deductDues in wallet-db.ts).
+   5,4,3,2,1 days before the due date, then a REAL charge on the
+   due date that debits the member's wallet AND splits the money
+   50/20/20/10 down their ward → LGA → state → national treasuries
+   (§7.3). The amount is the member's own category dues (§4.1);
+   non-paying tiers are skipped. Reminders dedupe to one per day;
+   the charge is idempotent (unique ledger reference per month).
    ============================================================ */
 
-const DUES_NAIRA = 5_000;
 const DUE_DAY = 28; // dues collect on the 28th of every month
 const DAY_MS = 86_400_000;
 
@@ -53,23 +53,27 @@ export async function ensureDuesNotifications(): Promise<void> {
   const monthName = due.toLocaleDateString("en-GB", { month: "long" });
   const monthKey = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, "0")}`;
 
+  // Non-paying tiers (student / honorary / institutional) get no dues clock.
+  const { amount: dues } = await memberDuesAmount(u.id);
+  if (dues <= 0) return;
+
   if (daysLeft >= 1 && daysLeft <= 5) {
     const prefix = "Monthly dues reminder";
     if (await hasRecentNotif(u.id, "dues", { bodyPrefix: prefix, withinMs: 20 * 3600_000 })) return;
     await notify(u.id, {
       type: "dues",
-      body: `${prefix}: ${fmtNaira(DUES_NAIRA)} will be deducted in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${DUE_DAY} ${monthName}). Keep your wallet funded — dues power ward organising.`,
+      body: `${prefix}: ${fmtNaira(dues)} will be deducted in ${daysLeft} day${daysLeft === 1 ? "" : "s"} (${DUE_DAY} ${monthName}). Keep your wallet funded — dues power ward organising.`,
       href: "finance",
     });
     return;
   }
 
   if (daysLeft === 0) {
-    const result = await deductDues(u.id, DUES_NAIRA, `dues_${u.id}_${monthKey}`, `Monthly dues — ${monthName}`);
-    if (result.ok) {
+    const result = await chargeMonthlyDues(u.id, monthKey, monthName);
+    if (result.ok && !result.alreadyCharged) {
       await notify(u.id, {
         type: "dues",
-        body: `Dues deducted: ${fmtNaira(DUES_NAIRA)} monthly dues for ${monthName} deducted from your wallet. Thank you for keeping the movement strong.`,
+        body: `Dues deducted: ${fmtNaira(result.amount ?? dues)} for ${monthName} — split to your ward, LGA, state & national treasuries. Thank you for keeping the movement strong.`,
         href: "finance",
       });
       return;
@@ -79,11 +83,11 @@ export async function ensureDuesNotifications(): Promise<void> {
       if (await hasRecentNotif(u.id, "dues", { bodyPrefix: prefix, withinMs: 20 * 3600_000 })) return;
       await notify(u.id, {
         type: "dues",
-        body: `${prefix}: your ${fmtNaira(DUES_NAIRA)} ${monthName} dues couldn't be deducted. Deposit now to keep your membership active — every naira funds the movement on the ground.`,
+        body: `${prefix}: your ${fmtNaira(result.amount ?? dues)} ${monthName} dues couldn't be deducted. Deposit now to keep your membership active — every naira funds the movement on the ground.`,
         href: "finance",
       });
     }
-    // reason === "already_deducted" → this month is settled; nothing to do.
+    // ok && alreadyCharged → this month is settled; nothing to do.
   }
 }
 
@@ -95,8 +99,11 @@ export async function getDuesStatus(): Promise<{ due: string; amount: number; ba
   let due = new Date(now.getFullYear(), now.getMonth(), DUE_DAY);
   if (now.getDate() > DUE_DAY) due = new Date(now.getFullYear(), now.getMonth() + 1, DUE_DAY);
   try {
-    const balance = u && usesDb(u.id) ? await withRetry(() => getBalance(u.id)) : 0;
-    return { due: due.toISOString(), amount: DUES_NAIRA, balance };
+    if (!u || !usesDb(u.id)) return { due: due.toISOString(), amount: 0, balance: 0 };
+    const [balance, dues] = await withRetry(() =>
+      Promise.all([getBalance(u.id), memberDuesAmount(u.id)]),
+    );
+    return { due: due.toISOString(), amount: dues.amount, balance };
   } catch (err) {
     console.error("getDuesStatus failed (returning null so the client keeps its last-known state):", err);
     return null;

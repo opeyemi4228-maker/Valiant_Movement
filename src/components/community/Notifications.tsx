@@ -100,7 +100,7 @@ export function Notifications({
     // Opening the tab marks them read a moment later, so the nav badge clears
     // (the "new" highlight stays for this view until the next refresh).
     const mark = setTimeout(() => { markNotificationsRead().catch(() => {}); }, 1200);
-    const poll = setInterval(load, 1500); // tightened — matches the rest of the app's real-time feel
+    const poll = setInterval(load, 5000); // pulled back — reduce database data-transfer load
     return () => { alive = false; clearTimeout(mark); clearInterval(poll); };
   }, [bookmarks, active]);
 

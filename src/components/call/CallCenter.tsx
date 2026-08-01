@@ -141,7 +141,7 @@ export function CallCenter() {
         setOutStatus(sig.status === "declined" ? "Call declined" : sig.status === "missed" ? "No answer" : "Call ended");
         setTimeout(() => { if (alive) { setOutgoing(null); setOutStatus(undefined); } }, 1800);
       }
-    }, 200); // poll pickup fast so accepting a call connects instantly
+    }, 800); // pulled back from 200ms — reduce database data-transfer load
     return () => { alive = false; clearInterval(t); };
   }, [outgoing]);
 
@@ -174,14 +174,14 @@ export function CallCenter() {
       // miss). Only give up after several consecutive misses (~9s total) so
       // a live call is never cut short by a single failed poll.
       if (!sig) {
-        if (++misses >= 20) {
+        if (++misses >= 6) {
           clearInterval(t);
           setInCall((c) => (c ? { ...c, remoteEnded: true } : null));
         }
       } else {
         misses = 0;
       }
-    }, 450); // tightened again — 2x faster, miss-tolerance doubled to keep the same ~9s grace
+    }, 1500); // pulled back from 450ms — reduce database data-transfer load; miss-tolerance halved to keep the same ~9s grace
     return () => { alive = false; clearInterval(t); };
   }, [inCall]);
 

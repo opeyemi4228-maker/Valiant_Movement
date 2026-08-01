@@ -86,6 +86,22 @@ const endedCallReturning = {
   answeredAt: callSignals.answeredAt,
 };
 
+/** Everything rowToSignal() needs — used so an UPDATE that flips a call's
+ *  status can hand back the resulting CallSignal directly via `.returning()`,
+ *  instead of a separate SELECT (getCallSignal) right after. */
+const fullCallReturning = {
+  id: callSignals.id,
+  callerId: callSignals.callerId,
+  calleeId: callSignals.calleeId,
+  callerName: callSignals.callerName,
+  callerColor: callSignals.callerColor,
+  calleeName: callSignals.calleeName,
+  mode: callSignals.mode,
+  status: callSignals.status,
+  createdAt: callSignals.createdAt,
+  answeredAt: callSignals.answeredAt, // also doubles as an EndedCallRow for logCallEvents
+};
+
 async function directConversationBetween(a: string, b: string): Promise<string | null> {
   const mine = await db
     .select({ c: conversationMembers.conversationId })
@@ -139,20 +155,28 @@ async function logCallEvents(rows: EndedCallRow[], terminal: "missed" | "decline
 /* ------------------------------- calls ------------------------------- */
 
 export async function placeCall(callerId: string, calleeId: string, mode: CallMode): Promise<CallSignal> {
-  // Retire any prior live calls involving the caller.
-  const retired = await db
-    .update(callSignals)
-    .set({ status: "ended", updatedAt: new Date() })
-    .where(
-      and(
-        or(eq(callSignals.callerId, callerId), eq(callSignals.calleeId, callerId)),
-        inArray(callSignals.status, ["ringing", "accepted"]),
-      ),
-    )
-    .returning(endedCallReturning);
-  await logCallEvents(retired, "ended");
+  // Retiring any prior live call and resolving both display names are
+  // independent of each other — run them together instead of one after
+  // another, which is what this used to do.
+  const [retired, callerName, calleeName] = await Promise.all([
+    db
+      .update(callSignals)
+      .set({ status: "ended", updatedAt: new Date() })
+      .where(
+        and(
+          or(eq(callSignals.callerId, callerId), eq(callSignals.calleeId, callerId)),
+          inArray(callSignals.status, ["ringing", "accepted"]),
+        ),
+      )
+      .returning(endedCallReturning),
+    nameOf(callerId),
+    nameOf(calleeId),
+  ]);
+  // Best-effort history for whatever call this new one is replacing — it
+  // doesn't need to block placing the new call (rare case: caller was
+  // already mid-call), so it isn't awaited.
+  void logCallEvents(retired, "ended");
 
-  const [callerName, calleeName] = await Promise.all([nameOf(callerId), nameOf(calleeId)]);
   const [row] = await db
     .insert(callSignals)
     .values({
@@ -212,15 +236,25 @@ export async function incomingCallFor(calleeId: string): Promise<CallSignal | nu
 }
 
 export async function answerCallSignal(id: string, meId: string): Promise<CallSignal | null> {
-  await db
+  // `.returning()` hands back the just-accepted row directly — this used to
+  // do the UPDATE and then a separate getCallSignal() SELECT right after,
+  // doubling the latency of the single most time-sensitive moment in a call
+  // (the callee tapping Accept). Safe to build the signal straight from this
+  // row: it just became "accepted", so rowToSignal's ringing→missed TTL
+  // check can never apply to it.
+  const [row] = await db
     .update(callSignals)
     .set({ status: "accepted", answeredAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(callSignals.id, id), eq(callSignals.calleeId, meId), eq(callSignals.status, "ringing")));
-  return getCallSignal(id);
+    .where(and(eq(callSignals.id, id), eq(callSignals.calleeId, meId), eq(callSignals.status, "ringing")))
+    .returning(fullCallReturning);
+  // Nothing flipped — wasn't ours to accept (already answered/ended, or the
+  // wrong callee). Fall back to a plain read for an accurate current state.
+  if (!row) return getCallSignal(id);
+  return rowToSignal(row as unknown as CallRow);
 }
 
 export async function declineCallSignal(id: string, meId: string): Promise<CallSignal | null> {
-  const flipped = await db
+  const [row] = await db
     .update(callSignals)
     .set({ status: "declined", updatedAt: new Date() })
     .where(
@@ -230,9 +264,11 @@ export async function declineCallSignal(id: string, meId: string): Promise<CallS
         inArray(callSignals.status, ["ringing", "accepted"]),
       ),
     )
-    .returning(endedCallReturning);
-  await logCallEvents(flipped, "declined");
-  return getCallSignal(id);
+    .returning(fullCallReturning);
+  if (!row) return getCallSignal(id);
+  // Best-effort history — doesn't need to block returning the signal.
+  void logCallEvents([row], "declined");
+  return rowToSignal(row as unknown as CallRow);
 }
 
 export async function endCallSignal(id: string): Promise<void> {

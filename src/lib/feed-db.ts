@@ -231,22 +231,36 @@ async function toggleReaction(meId: string, postId: string, type: "like" | "repo
   return false;
 }
 
+// Each toggle used to start with its own "SELECT ... WHERE id = postId"
+// just to confirm the post exists before reacting — a whole extra round
+// trip, when getPostDTO() (already called right after) fetches that same
+// row anyway and can supply authorId/existence just as well. Reacting to a
+// postId that doesn't exist fails on postReactions' foreign key instead;
+// that's caught and treated the same as "not found" used to be.
 export async function toggleLike(
   meId: string,
   postId: string,
 ): Promise<{ liked: boolean; authorId: string; post: FeedPost } | null> {
-  const [p] = await db.select({ authorId: posts.authorId }).from(posts).where(eq(posts.id, postId)).limit(1);
-  if (!p) return null;
-  const liked = await toggleReaction(meId, postId, "like");
+  let liked: boolean;
+  try {
+    liked = await toggleReaction(meId, postId, "like");
+  } catch (err) {
+    console.error("toggleLike failed (post may not exist):", err);
+    return null;
+  }
   const post = await getPostDTO(meId, postId);
   if (!post) return null;
-  return { liked, authorId: p.authorId, post };
+  return { liked, authorId: post.authorId, post };
 }
 
 export async function toggleRepost(meId: string, postId: string): Promise<{ reposted: boolean; post: FeedPost } | null> {
-  const [p] = await db.select({ id: posts.id }).from(posts).where(eq(posts.id, postId)).limit(1);
-  if (!p) return null;
-  const reposted = await toggleReaction(meId, postId, "repost");
+  let reposted: boolean;
+  try {
+    reposted = await toggleReaction(meId, postId, "repost");
+  } catch (err) {
+    console.error("toggleRepost failed (post may not exist):", err);
+    return null;
+  }
   const post = await getPostDTO(meId, postId);
   if (!post) return null;
   return { reposted, post };
@@ -257,21 +271,24 @@ export async function toggleBookmark(
   meId: string,
   postId: string,
 ): Promise<{ bookmarked: boolean; post: FeedPost } | null> {
-  const [p] = await db.select({ id: posts.id }).from(posts).where(eq(posts.id, postId)).limit(1);
-  if (!p) return null;
-  const added = await db
-    .insert(postReactions)
-    .values({ postId, userId: meId, type: "bookmark" })
-    .onConflictDoNothing()
-    .returning({ postId: postReactions.postId });
   let bookmarked: boolean;
-  if (added.length) {
-    bookmarked = true;
-  } else {
-    await db
-      .delete(postReactions)
-      .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, meId), eq(postReactions.type, "bookmark")));
-    bookmarked = false;
+  try {
+    const added = await db
+      .insert(postReactions)
+      .values({ postId, userId: meId, type: "bookmark" })
+      .onConflictDoNothing()
+      .returning({ postId: postReactions.postId });
+    if (added.length) {
+      bookmarked = true;
+    } else {
+      await db
+        .delete(postReactions)
+        .where(and(eq(postReactions.postId, postId), eq(postReactions.userId, meId), eq(postReactions.type, "bookmark")));
+      bookmarked = false;
+    }
+  } catch (err) {
+    console.error("toggleBookmark failed (post may not exist):", err);
+    return null;
   }
   const post = await getPostDTO(meId, postId);
   if (!post) return null;

@@ -3,6 +3,7 @@
 import { and, asc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { conversationMembers, conversations, messages, profiles, users } from "@/db/schema";
+import { uuidv7 } from "@/db/id";
 import { getCurrentUserSafe } from "@/lib/session";
 import { usesDb } from "@/lib/env";
 import { withRetry } from "@/lib/retry";
@@ -318,15 +319,6 @@ export async function startDirect(otherUserId: string): Promise<{ ok: boolean; c
 
 /* ----------------------------- messages ----------------------------- */
 
-async function isMember(conversationId: string, userId: string): Promise<boolean> {
-  const [row] = await db
-    .select({ userId: conversationMembers.userId })
-    .from(conversationMembers)
-    .where(and(eq(conversationMembers.conversationId, conversationId), eq(conversationMembers.userId, userId)))
-    .limit(1);
-  return !!row;
-}
-
 /** A member counts as "online" if their presence heartbeat (updated on every
  *  ~600ms poll while the app is open, in any tab) landed within this window. */
 const ONLINE_WINDOW_MS = 20_000;
@@ -447,7 +439,6 @@ export async function sendMessage(
     }
     return { ...res, flagged: hit.flagged };
   }
-  if (!(await isMember(conversationId, id))) return { ok: false, error: "forbidden" };
   const text = body.trim().slice(0, MAX_BODY_CHARS);
   if (!text && !media) return { ok: false, error: "empty" };
   if (media?.kind === "call" || media?.kind === "system") {
@@ -457,10 +448,23 @@ export async function sendMessage(
     return { ok: false, error: "Attachment is too large — keep it under 5 MB." };
   }
 
-  const [row] = await db
-    .insert(messages)
-    .values({ conversationId, senderId: id, body: text || null, media: media ?? null, deliveredAt: new Date() })
-    .returning({ id: messages.id, createdAt: messages.createdAt });
+  // One round trip instead of two: the row is only actually written if the
+  // sender is a member of this conversation (checked via EXISTS in the same
+  // statement) — this used to be a separate isMember() query awaited before
+  // the insert, doubling the latency of every single message sent. An empty
+  // result means the EXISTS check failed, i.e. "forbidden".
+  const newId = uuidv7();
+  const inserted = await db.execute<{ id: string; createdAt: string }>(sql`
+    INSERT INTO messages (id, conversation_id, sender_id, body, media, delivered_at)
+    SELECT ${newId}, ${conversationId}, ${id}, ${text || null}, ${media ? JSON.stringify(media) : null}::jsonb, now()
+    WHERE EXISTS (
+      SELECT 1 FROM conversation_members
+      WHERE conversation_id = ${conversationId} AND user_id = ${id}
+    )
+    RETURNING id, created_at AS "createdAt"
+  `);
+  if (inserted.rows.length === 0) return { ok: false, error: "forbidden" };
+  const row = inserted.rows[0];
 
   if (hit.flagged) {
     mem.recordModerationAlert({

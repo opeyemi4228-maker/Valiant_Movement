@@ -83,7 +83,7 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
       refresh();
       ensureDuesNotifications().catch(() => {});
     }, 0); // after paint — no sync setState in the effect body
-    const t = setInterval(refresh, 1500); // tightened — matches the rest of the app's real-time feel
+    const t = setInterval(refresh, 5000); // pulled back — reduce database data-transfer load
     return () => {
       clearTimeout(kick);
       clearInterval(t);

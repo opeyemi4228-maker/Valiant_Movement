@@ -177,7 +177,7 @@ export function CommunityChat({
       } finally {
         inFlight = false;
       }
-    }, 200); // tightened again — as fast as this architecture allows
+    }, 2500); // pulled back — sub-second polling was burning through the DB's data-transfer quota
     return () => clearInterval(t);
   }, [state, conversationId, community.id, memberCount]);
 

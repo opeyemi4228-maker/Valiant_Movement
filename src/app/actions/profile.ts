@@ -113,73 +113,91 @@ export async function updateMyProfile(
     return { ok: false, error: "That cover image is too large — try a smaller image." };
   }
 
+  // The current row (state/LGA NAMES already joined in, not just ids — that's
+  // what lets the response be built below without a final re-fetch) and the
+  // username-uniqueness check are independent reads, run concurrently instead
+  // of one after another. Together with dropping the closing re-fetch and no
+  // longer blocking on community re-placement (below), this took a profile
+  // save from ~4 sequential Neon round trips down to ~2 in the common case
+  // (name/bio/avatar edits with no geo change) — each round trip has real,
+  // fixed network latency, so this is most of where the perceived delay was.
+  const [[before], usernameTaken] = await Promise.all([
+    db
+      .select({
+        stateId: profiles.stateId,
+        lgaId: profiles.lgaId,
+        ward: profiles.ward,
+        pollingUnit: profiles.pollingUnit,
+        fullName: profiles.fullName,
+        username: profiles.username,
+        bio: profiles.bio,
+        avatar: profiles.avatarUrl,
+        cover: profiles.coverUrl,
+        createdAt: profiles.createdAt,
+        stateName: states.name,
+        lgaName: lgas.name,
+      })
+      .from(profiles)
+      .leftJoin(states, eq(states.id, profiles.stateId))
+      .leftJoin(lgas, eq(lgas.id, profiles.lgaId))
+      .where(eq(profiles.userId, u.id))
+      .limit(1),
+    username
+      ? db
+          .select({ userId: profiles.userId })
+          .from(profiles)
+          .where(and(eq(profiles.username, username), ne(profiles.userId, u.id)))
+          .limit(1)
+      : Promise.resolve([]),
+  ]);
+  if (!before) return { ok: false, error: "Profile not found." };
+  if (username && usernameTaken.length > 0) return { ok: false, error: "That username is taken." };
+
   /* --------------------- resolve geo names → ids --------------------- */
   let stateId: string | null | undefined; // undefined = untouched
+  let stateName: string | null | undefined;
   let lgaId: string | null | undefined;
+  let lgaName: string | null | undefined;
   if (patch.state !== undefined) {
-    const stateName = (patch.state ?? "").trim();
-    if (!stateName) {
+    const trimmedState = (patch.state ?? "").trim();
+    if (!trimmedState) {
       stateId = null;
+      stateName = null;
       lgaId = null;
+      lgaName = null;
     } else {
       const [s] = await db
-        .select({ id: states.id })
+        .select({ id: states.id, name: states.name })
         .from(states)
-        .where(sql`lower(${states.name}) = ${stateName.toLowerCase()}`)
+        .where(sql`lower(${states.name}) = ${trimmedState.toLowerCase()}`)
         .limit(1);
-      if (!s) return { ok: false, error: `"${stateName}" isn't a recognised state.` };
+      if (!s) return { ok: false, error: `"${trimmedState}" isn't a recognised state.` };
       stateId = s.id;
+      stateName = s.name;
     }
   }
   if (patch.lga !== undefined && lgaId !== null) {
-    const lgaName = (patch.lga ?? "").trim();
-    if (!lgaName) {
+    const trimmedLga = (patch.lga ?? "").trim();
+    if (!trimmedLga) {
       lgaId = null;
+      lgaName = null;
     } else {
-      // Resolve within the (possibly just-changed) state.
-      const targetStateId =
-        stateId ??
-        (
-          await db
-            .select({ id: profiles.stateId })
-            .from(profiles)
-            .where(eq(profiles.userId, u.id))
-            .limit(1)
-        )[0]?.id ??
-        null;
+      // Resolve within the (possibly just-changed) state — already have it
+      // from the concurrent fetch above, no extra round trip needed.
+      const targetStateId = stateId ?? before.stateId ?? null;
       if (!targetStateId) return { ok: false, error: "Pick a state before choosing an LGA." };
       const [l] = await db
-        .select({ id: lgas.id })
+        .select({ id: lgas.id, name: lgas.name })
         .from(lgas)
-        .where(and(eq(lgas.stateId, targetStateId), sql`lower(${lgas.name}) = ${lgaName.toLowerCase()}`))
+        .where(and(eq(lgas.stateId, targetStateId), sql`lower(${lgas.name}) = ${trimmedLga.toLowerCase()}`))
         .limit(1);
-      if (!l) return { ok: false, error: `"${lgaName}" isn't an LGA of that state.` };
+      if (!l) return { ok: false, error: `"${trimmedLga}" isn't an LGA of that state.` };
       lgaId = l.id;
+      lgaName = l.name;
     }
   }
 
   /* ----------------------------- persist ----------------------------- */
-  const [before] = await db
-    .select({
-      stateId: profiles.stateId,
-      lgaId: profiles.lgaId,
-      ward: profiles.ward,
-      pollingUnit: profiles.pollingUnit,
-    })
-    .from(profiles)
-    .where(eq(profiles.userId, u.id))
-    .limit(1);
-  if (!before) return { ok: false, error: "Profile not found." };
-
-  if (username) {
-    const [taken] = await db
-      .select({ userId: profiles.userId })
-      .from(profiles)
-      .where(and(eq(profiles.username, username), ne(profiles.userId, u.id)))
-      .limit(1);
-    if (taken) return { ok: false, error: "That username is taken." };
-  }
-
   const set: Partial<typeof profiles.$inferInsert> = {};
   if (fullName !== undefined) set.fullName = fullName;
   if (username !== undefined) set.username = username || null;
@@ -202,13 +220,32 @@ export async function updateMyProfile(
     (set.ward !== undefined && set.ward !== before.ward) ||
     (set.pollingUnit !== undefined && set.pollingUnit !== before.pollingUnit);
   if (geoChanged) {
-    try {
-      await syncGeoCommunities(u.id);
-    } catch (err) {
-      // The save succeeded; community re-placement self-heals on next load.
+    // Fire-and-forget — this was already tolerant of failure (self-heals on
+    // next load), so there's no reason to make the member wait on it. It
+    // could add several more round trips of latency to a save that's
+    // otherwise already been persisted successfully.
+    void syncGeoCommunities(u.id).catch((err) => {
       console.error("syncGeoCommunities failed:", err);
-    }
+    });
   }
 
-  return { ok: true, profile: (await dbProfileDTO(u.id))! };
+  // Built entirely from data already in hand (the patch + the row fetched
+  // above) — no closing re-fetch of the profile needed.
+  const profile: ProfileDTO = {
+    id: u.id,
+    fullName: fullName ?? before.fullName ?? u.email.split("@")[0],
+    username: (username !== undefined ? username : before.username) ?? "",
+    email: u.email,
+    bio: (patch.bio !== undefined ? (patch.bio ?? "").slice(0, 280) : before.bio) ?? "",
+    avatar: patch.avatar !== undefined ? patch.avatar : before.avatar,
+    cover: patch.cover !== undefined ? patch.cover : before.cover,
+    color: colorFor(u.id),
+    state: (stateName !== undefined ? stateName : before.stateName) ?? "",
+    lga: (lgaName !== undefined ? lgaName : before.lgaName) ?? "",
+    ward: (set.ward !== undefined ? set.ward : before.ward) ?? "",
+    pollingUnit: (set.pollingUnit !== undefined ? set.pollingUnit : before.pollingUnit) ?? "",
+    memberSince: before.createdAt ? new Date(before.createdAt).toISOString() : null,
+  };
+
+  return { ok: true, profile };
 }

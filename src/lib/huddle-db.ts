@@ -1,5 +1,5 @@
 import "server-only";
-import { and, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   communities,
@@ -55,6 +55,35 @@ function pair(me: string, other: string): { aId: string; bId: string } {
   return me < other ? { aId: me, bId: other } : { aId: other, bId: me };
 }
 
+interface ActiveHuddle {
+  huddleId: string;
+  mode: string;
+  count: number;
+  startedBy: string;
+}
+
+/** Same lookup as `activeHuddleFor`, but for callers that already know the
+ *  community's conversationId (e.g. startOrJoinHuddle) — skips re-resolving
+ *  it. The huddle lookup and its fresh-peer count are combined into ONE
+ *  round trip (a correlated subquery) instead of two sequential queries. */
+async function activeHuddleForConversation(conversationId: string): Promise<ActiveHuddle | null> {
+  const fresh = new Date(Date.now() - PEER_TTL_MS);
+  const res = await db.execute<{ id: string; mode: string; startedBy: string; n: number }>(sql`
+    SELECT h.id, h.mode, h.started_by AS "startedBy",
+      (
+        SELECT count(*)::int FROM huddle_peers hp
+        WHERE hp.huddle_id = h.id AND hp.left_at IS NULL AND hp.last_seen_at > ${fresh}
+      ) AS n
+    FROM huddles h
+    WHERE h.conversation_id = ${conversationId} AND h.ended_at IS NULL
+    ORDER BY h.started_at DESC
+    LIMIT 1
+  `);
+  const h = res.rows[0];
+  if (!h || h.n === 0) return null; // nothing to show right now — the room itself is untouched
+  return { huddleId: h.id, mode: h.mode, count: h.n, startedBy: h.startedBy };
+}
+
 /**
  * The community's live huddle (if any) — for the "join" banner. PURE READ:
  * this is polled every ~2.5s by anyone viewing the community chat, whether
@@ -64,31 +93,14 @@ function pair(me: string, other: string): { aId: string; bId: string } {
  * show this instant — it is NOT evidence the room should be torn down.
  * Actual room teardown only happens via `leaveHuddle` (an explicit leave).
  */
-export async function activeHuddleFor(
-  communityId: string,
-): Promise<{ huddleId: string; mode: string; count: number; startedBy: string } | null> {
+export async function activeHuddleFor(communityId: string): Promise<ActiveHuddle | null> {
   const [c] = await db
     .select({ conversationId: communities.conversationId })
     .from(communities)
     .where(eq(communities.id, communityId))
     .limit(1);
   if (!c?.conversationId) return null;
-
-  const [h] = await db
-    .select({ id: huddles.id, mode: huddles.mode, startedBy: huddles.startedBy })
-    .from(huddles)
-    .where(and(eq(huddles.conversationId, c.conversationId), isNull(huddles.endedAt)))
-    .orderBy(desc(huddles.startedAt))
-    .limit(1);
-  if (!h) return null;
-
-  const fresh = new Date(Date.now() - PEER_TTL_MS);
-  const [{ n }] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(huddlePeers)
-    .where(and(eq(huddlePeers.huddleId, h.id), isNull(huddlePeers.leftAt), gt(huddlePeers.lastSeenAt, fresh)));
-  if (n === 0) return null; // nothing to show right now — the room itself is untouched
-  return { huddleId: h.id, mode: h.mode, count: n, startedBy: h.startedBy };
+  return activeHuddleForConversation(c.conversationId);
 }
 
 /** Every live huddle across every community this member belongs to — drives
@@ -132,23 +144,29 @@ export async function startOrJoinHuddle(
   communityId: string,
   mode: "voice" | "video",
 ): Promise<{ ok: boolean; huddleId?: string; mode?: string; startedBy?: string; error?: string }> {
-  const [membership] = await db
-    .select({ role: communityMembers.role })
-    .from(communityMembers)
-    .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, userId)))
-    .limit(1);
+  // The membership check and the community lookup are independent — run
+  // them together instead of one after another. This whole function used
+  // to be 5-8 sequential round trips (worse when starting a brand-new
+  // huddle); every join/start of a call paid that in full before the WebRTC
+  // side even began connecting.
+  const [[membership], [c]] = await Promise.all([
+    db
+      .select({ role: communityMembers.role })
+      .from(communityMembers)
+      .where(and(eq(communityMembers.communityId, communityId), eq(communityMembers.userId, userId)))
+      .limit(1),
+    db
+      .select({ conversationId: communities.conversationId, name: communities.name })
+      .from(communities)
+      .where(eq(communities.id, communityId))
+      .limit(1),
+  ]);
   if (!membership) return { ok: false, error: "Only members of this community can join its huddle." };
-
-  const [c] = await db
-    .select({ conversationId: communities.conversationId, name: communities.name })
-    .from(communities)
-    .where(eq(communities.id, communityId))
-    .limit(1);
   if (!c?.conversationId) return { ok: false, error: "Open the community chat once before starting a huddle." };
 
-  const live = await activeHuddleFor(communityId);
-  let huddleId = live?.huddleId;
-  let liveMode = live?.mode ?? mode;
+  const live = await activeHuddleForConversation(c.conversationId);
+  const huddleId = live?.huddleId;
+  const liveMode = live?.mode ?? mode;
   const startedBy = live?.startedBy ?? userId;
 
   // Starting a NEW huddle is a coordinator action (owner/admin — appointed via
@@ -159,57 +177,69 @@ export async function startOrJoinHuddle(
     return { ok: false, error: "Only your community's coordinator (or someone they've delegated) can start a huddle." };
   }
 
-  if (!huddleId) {
-    const [h] = await db
-      .insert(huddles)
-      .values({ conversationId: c.conversationId, mode, startedBy: userId })
-      .returning({ id: huddles.id });
-    huddleId = h.id;
-    liveMode = mode;
+  if (huddleId) {
+    // Joining an already-live huddle — just seat as a peer.
+    await db
+      .insert(huddlePeers)
+      .values({ huddleId, userId })
+      .onConflictDoUpdate({
+        target: [huddlePeers.huddleId, huddlePeers.userId],
+        set: { lastSeenAt: new Date(), leftAt: null },
+      });
+    return { ok: true, huddleId, mode: liveMode, startedBy };
+  }
 
-    // Announce in the thread + ring the bell of every member (best-effort).
-    const who = await nameOf(userId);
-    const label = mode === "video" ? "video" : "voice";
-    await db.insert(messages).values({
+  // Creating the huddle row and resolving the starter's display name don't
+  // depend on each other — run them together.
+  const [[h], who] = await Promise.all([
+    db.insert(huddles).values({ conversationId: c.conversationId, mode, startedBy: userId }).returning({ id: huddles.id }),
+    nameOf(userId),
+  ]);
+  const newHuddleId = h.id;
+  const label = mode === "video" ? "video" : "voice";
+
+  // Nor do the announcement message and seating the starter as the first
+  // peer — both only need values already resolved above.
+  await Promise.all([
+    db.insert(messages).values({
       conversationId: c.conversationId,
       senderId: userId,
       body: `${who} started a live ${label} huddle — join from the community chat`,
       media: { kind: "system", systemEvent: "joined" },
       deliveredAt: new Date(),
-    });
-    void (async () => {
-      try {
-        const members = await db
-          .select({ id: communityMembers.userId })
-          .from(communityMembers)
-          .where(and(eq(communityMembers.communityId, communityId), ne(communityMembers.userId, userId)))
-          .limit(100);
-        await Promise.all(
-          members.map((m) =>
-            notify(m.id, {
-              type: "call",
-              actorId: userId,
-              actorName: who,
-              body: `${who} started a live ${label} huddle in ${c.name} — tap Communities to join`,
-              href: "communities",
-            }),
-          ),
-        );
-      } catch (err) {
-        console.error("huddle announce failed:", err);
-      }
-    })();
-  }
-
-  await db
-    .insert(huddlePeers)
-    .values({ huddleId, userId })
-    .onConflictDoUpdate({
+    }),
+    db.insert(huddlePeers).values({ huddleId: newHuddleId, userId }).onConflictDoUpdate({
       target: [huddlePeers.huddleId, huddlePeers.userId],
       set: { lastSeenAt: new Date(), leftAt: null },
-    });
+    }),
+  ]);
 
-  return { ok: true, huddleId, mode: liveMode, startedBy };
+  // Best-effort bell to the rest of the community — never blocks the
+  // response, this is a "nice to have" alongside the thread announcement.
+  void (async () => {
+    try {
+      const members = await db
+        .select({ id: communityMembers.userId })
+        .from(communityMembers)
+        .where(and(eq(communityMembers.communityId, communityId), ne(communityMembers.userId, userId)))
+        .limit(100);
+      await Promise.all(
+        members.map((m) =>
+          notify(m.id, {
+            type: "call",
+            actorId: userId,
+            actorName: who,
+            body: `${who} started a live ${label} huddle in ${c.name} — tap Communities to join`,
+            href: "communities",
+          }),
+        ),
+      );
+    } catch (err) {
+      console.error("huddle announce failed:", err);
+    }
+  })();
+
+  return { ok: true, huddleId: newHuddleId, mode, startedBy };
 }
 
 /** Heartbeat + room state: active peers and my pair signals, in one trip. */

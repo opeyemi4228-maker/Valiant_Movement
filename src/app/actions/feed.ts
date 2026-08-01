@@ -93,7 +93,12 @@ export async function publishPost(text: string, image?: string): Promise<{ ok: b
   if (image && image.length > 1_500_000) return { ok: false, error: "That image is too large." };
   if (usesDb(u.id)) await fdb.addPost(u.id, text, image);
   else mem.addPost(u.id, text, image);
-  await announcePost(u.id, u.name);
+  // Notifying every other member (up to 100 writes) is a side effect, not
+  // part of "did my post publish" — this used to block the response on the
+  // whole fan-out finishing, so every single post paid for it. It's already
+  // wrapped in try/catch (best-effort), so there's nothing lost by not
+  // waiting on it here too.
+  void announcePost(u.id, u.name);
   return { ok: true };
 }
 

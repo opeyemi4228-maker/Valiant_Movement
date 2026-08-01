@@ -145,13 +145,16 @@ export function AdminCommunity({
   // the monitor stays in sync with what members are doing right now.
   const [stats, setStats] = useState<CommunityMonitorStats | null>(null);
   const [feed, setFeed] = useState<FeedPost[] | null>(null);
+  // >0 while a moderation write is in flight — the poll skips overwriting the
+  // feed then, so an optimistic flip can't be clobbered by an in-flight refetch.
+  const mutatingRef = useRef(0);
   useEffect(() => {
     let alive = true;
     const pull = async () => {
       const res = await getCommunityMonitor();
       if (alive && res.ok) {
         setStats(res.stats ?? null);
-        setFeed(res.posts ?? []);
+        if (mutatingRef.current === 0) setFeed(res.posts ?? []);
       }
     };
     pull();
@@ -162,18 +165,41 @@ export function AdminCommunity({
     };
   }, []);
 
-  // Apply a moderation action, then reflect the DB's returned state optimistically
-  // (the next poll re-confirms it). Hiding a post here removes it from members' feeds.
-  async function moderate(postId: string, action: "pin" | "hide" | "flag") {
-    const res = await moderatePost(postId, action);
-    if (!res.ok) return;
-    setFeed((prev) =>
-      prev
-        ? prev.map((p) =>
-            p.id === postId ? { ...p, pinned: res.pinned, hidden: res.hidden, flagged: res.flagged } : p,
-          )
-        : prev,
-    );
+  // Instant, optimistic moderation: flip the button's state on click (no wait),
+  // then persist in the background and reconcile with the DB's answer — only
+  // reverting if the write actually failed. Hiding removes the post from members' feeds.
+  const flip = (p: FeedPost, action: "pin" | "hide" | "flag"): FeedPost =>
+    action === "pin"
+      ? { ...p, pinned: !p.pinned }
+      : action === "hide"
+      ? { ...p, hidden: !p.hidden }
+      : { ...p, flagged: !p.flagged };
+
+  function moderate(postId: string, action: "pin" | "hide" | "flag") {
+    // 1) reflect immediately
+    mutatingRef.current += 1;
+    setFeed((prev) => (prev ? prev.map((p) => (p.id === postId ? flip(p, action) : p)) : prev));
+    // 2) persist + reconcile (revert on failure)
+    moderatePost(postId, action)
+      .then((res) =>
+        setFeed((prev) =>
+          prev
+            ? prev.map((p) =>
+                p.id !== postId
+                  ? p
+                  : res.ok
+                  ? { ...p, pinned: res.pinned, hidden: res.hidden, flagged: res.flagged }
+                  : flip(p, action), // undo the optimistic flip
+              )
+            : prev,
+        ),
+      )
+      .catch(() =>
+        setFeed((prev) => (prev ? prev.map((p) => (p.id === postId ? flip(p, action) : p)) : prev)),
+      )
+      .finally(() => {
+        mutatingRef.current -= 1;
+      });
   }
 
   // "By scope" children render the Communities table (filtered) and highlight that tab.
@@ -987,21 +1013,10 @@ function ModButton({
   active?: boolean;
   onClick?: () => void | Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  async function handle() {
-    if (!onClick || busy) return;
-    setBusy(true);
-    try {
-      await onClick();
-    } finally {
-      setBusy(false);
-    }
-  }
   return (
     <button
-      onClick={handle}
-      disabled={busy}
-      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-60 ${
+      onClick={() => onClick?.()}
+      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition active:scale-95 ${
         active
           ? danger
             ? "border-[var(--color-danger)] bg-[var(--color-danger)]/10 text-[var(--color-danger)]"
@@ -1011,7 +1026,7 @@ function ModButton({
           : "border-[var(--color-line)] text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
       }`}
     >
-      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : icon}
+      {icon}
       {label}
     </button>
   );

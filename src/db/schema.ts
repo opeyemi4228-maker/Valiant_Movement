@@ -74,6 +74,17 @@ export const memberRole = pgEnum("member_role", [
 ]);
 export const conversationType = pgEnum("conversation_type", ["direct", "group"]);
 
+// Handbook §4.1 — the membership tier drives what the member is charged in dues
+// each month (amounts live in lib/dues.ts, adjustable without a migration).
+export const membershipCategory = pgEnum("membership_category", [
+  "student",
+  "regular",
+  "professional",
+  "diaspora",
+  "honorary",
+  "institutional",
+]);
+
 /* --------------------------- geo hierarchy --------------------------- */
 
 export const states = pgTable("states", {
@@ -160,6 +171,9 @@ export const identities = pgTable("identities", {
   legalLastName: text("legal_last_name"),
   dateOfBirth: date("date_of_birth"),
   gender: text("gender"),
+  // Membership tier (§4.1) — drives the monthly dues charge. Defaults to the
+  // standard "regular" tier; upgraded to student/professional/etc. as verified.
+  membershipCategory: membershipCategory("membership_category").notNull().default("regular"),
   source: text("source").default("manual"), // manual | nimc_sync
 });
 
@@ -635,6 +649,13 @@ export const wallets = pgTable("wallets", {
     .primaryKey()
     .references(() => users.id, { onDelete: "cascade" }),
   balance: integer("balance").notNull().default(0), // whole naira; never negative
+  // Monnify Reserved (dedicated) Account — a permanent NUBAN the member can
+  // bank-transfer into; funds auto-credit the wallet via the reserved-account
+  // webhook. `reservedRef` is OUR account reference sent to Monnify; the
+  // returned bank account(s) live in `reservedAccounts` (a provider can hand
+  // back several across banks). Null until the account is provisioned.
+  reservedRef: text("reserved_ref").unique(),
+  reservedAccounts: jsonb("reserved_accounts"), // [{accountNumber, bankName, bankCode}]
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow()
@@ -671,6 +692,86 @@ export const payments = pgTable(
     index("payments_user_idx").on(t.userId, t.createdAt.desc()),
     // webhook reconciliation / stuck-pending sweeps
     index("payments_status_idx").on(t.status, t.createdAt),
+  ],
+);
+
+/* ============================================================
+   Structure accounts — the National / State / LGA / Ward
+   treasuries (handbook §7.2). Each is "identical in shape to a
+   member's wallet": a running balance plus an audit ledger
+   (structure_payments). Dues shares flow IN via the 50/20/20/10
+   split (§7.3); spending flows OUT as a logged Withdraw that the
+   members' transparency view can read back (§7.6).
+
+   One row per structure node, identified by a deterministic
+   `key`: "national", "state:<stateId>", "lga:<lgaId>",
+   "ward:<lgaId>:<ward>". The key (not a nullable geo tuple) is
+   the uniqueness anchor, so the single National row can't be
+   duplicated the way NULLs-are-distinct would allow.
+   ============================================================ */
+
+export const structureLevel = pgEnum("structure_level", ["ward", "lga", "state", "national"]);
+export const structurePaymentKind = pgEnum("structure_payment_kind", [
+  "dues_share", // inflow: a member's dues share for this level
+  "withdrawal", // outflow: Finance-authorized spend to a bank account
+  "adjustment", // manual correction (audited)
+]);
+
+export const structureAccounts = pgTable(
+  "structure_accounts",
+  {
+    id: pk(),
+    key: text("key").notNull().unique(), // "national" | "state:<id>" | "lga:<id>" | "ward:<lgaId>:<ward>"
+    level: structureLevel("level").notNull(),
+    // Geography that owns this treasury (all null for national).
+    stateId: uuid("state_id").references(() => states.id),
+    lgaId: uuid("lga_id").references(() => lgas.id),
+    ward: text("ward"),
+    // Human label, e.g. "Ikeja LGA" / "Lagos State" / "National HQ".
+    name: text("name").notNull(),
+    balance: integer("balance").notNull().default(0), // whole naira; never negative
+    // Reserved (dedicated) account so this treasury can be funded by transfer.
+    reservedRef: text("reserved_ref").unique(),
+    reservedAccounts: jsonb("reserved_accounts"), // [{accountNumber, bankName, bankCode}]
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [index("structure_accounts_geo_idx").on(t.level, t.stateId, t.lgaId)],
+);
+
+export const structurePayments = pgTable(
+  "structure_payments",
+  {
+    id: pk(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => structureAccounts.id, { onDelete: "cascade" }),
+    kind: structurePaymentKind("kind").notNull(),
+    status: paymentStatus("status").notNull().default("completed"),
+    amount: integer("amount").notNull(), // whole naira, always positive
+    // For dues_share: the member whose dues produced this share (transparency).
+    sourceUserId: uuid("source_user_id").references(() => users.id, { onDelete: "set null" }),
+    // Idempotency key — "duesshare_<userId>_<monthKey>_<level>" for shares, so a
+    // retried monthly charge can never credit a treasury twice.
+    reference: text("reference").notNull().unique(),
+    // Withdrawal destination (mirrors payments) + who authorized it (§7.4).
+    destinationBankCode: text("destination_bank_code"),
+    destinationAccountNumber: text("destination_account_number"),
+    destinationAccountName: text("destination_account_name"),
+    authorizedBy: text("authorized_by"), // admin role key of the Finance officer
+    description: text("description"),
+    failureReason: text("failure_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    // a treasury's statement, newest first
+    index("structure_payments_account_idx").on(t.accountId, t.createdAt.desc()),
+    // "where did my dues go" — trace a member's shares across levels
+    index("structure_payments_source_idx").on(t.sourceUserId, t.createdAt.desc()),
   ],
 );
 

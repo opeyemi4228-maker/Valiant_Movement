@@ -1,7 +1,25 @@
 import "server-only";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { payments, wallets } from "@/db/schema";
+import {
+  identities,
+  lgas,
+  payments,
+  profiles,
+  states,
+  structureAccounts,
+  structurePayments,
+  wallets,
+} from "@/db/schema";
+import {
+  computeShares,
+  duesForCategory,
+  isPayingCategory,
+  SPLIT_ORDER,
+  type DuesShares,
+  type MembershipCategory,
+  type StructureLevel,
+} from "./dues";
 import type { PaymentKind, PaymentStatus } from "./wallet-types";
 
 /* ============================================================
@@ -227,29 +245,249 @@ export async function finalizeWithdrawalOutcome(
    a month's dues naturally idempotent: a second attempt is just a duplicate
    insert that the database rejects. */
 
-export async function deductDues(
-  userId: string,
+/* ============================================================
+   Structure accounts + the dues distribution engine (§7.2–7.4).
+
+   A member's monthly dues are debited once (gated by a unique
+   reference), then split 50/20/20/10 down the member's OWN
+   ward → LGA → state → national treasuries. Every credit is
+   itself gated by a per-level unique reference, so a retried or
+   concurrent charge can never double-credit a treasury, and a
+   charge that half-completed heals on the next run.
+   ============================================================ */
+
+interface StructureNode {
+  key: string;
+  level: StructureLevel;
+  name: string;
+  stateId?: string | null;
+  lgaId?: string | null;
+  ward?: string | null;
+}
+
+const NATIONAL_NODE: StructureNode = { key: "national", level: "national", name: "National HQ" };
+
+/** Get (creating if needed) the treasury row for a structure node, returning its id. */
+async function ensureStructureAccount(node: StructureNode): Promise<string> {
+  const [inserted] = await db
+    .insert(structureAccounts)
+    .values({
+      key: node.key,
+      level: node.level,
+      name: node.name,
+      stateId: node.stateId ?? null,
+      lgaId: node.lgaId ?? null,
+      ward: node.ward ?? null,
+    })
+    .onConflictDoNothing({ target: structureAccounts.key })
+    .returning({ id: structureAccounts.id });
+  if (inserted) return inserted.id;
+  const [row] = await db
+    .select({ id: structureAccounts.id })
+    .from(structureAccounts)
+    .where(eq(structureAccounts.key, node.key))
+    .limit(1);
+  return row.id;
+}
+
+/** Credit a treasury exactly once: the ledger insert (unique `reference`) is the
+ *  gate — only the caller that actually inserts the row moves the balance. */
+async function creditStructureOnce(
+  node: StructureNode,
   amount: number,
   reference: string,
+  sourceUserId: string,
   description: string,
-): Promise<{ ok: boolean; reason?: "insufficient_funds" | "already_deducted" }> {
-  const debited = await tryDebit(userId, amount);
-  if (!debited) return { ok: false, reason: "insufficient_funds" };
-  try {
-    await db.insert(payments).values({
-      userId,
-      kind: "dues",
+): Promise<boolean> {
+  if (amount <= 0) return false;
+  const accountId = await ensureStructureAccount(node);
+  const [ledgered] = await db
+    .insert(structurePayments)
+    .values({
+      accountId,
+      kind: "dues_share",
       status: "completed",
       amount,
+      sourceUserId,
       reference,
       description,
       completedAt: new Date(),
-    });
-    return { ok: true };
-  } catch {
-    // reference collision — dues for this month were already deducted by a
-    // concurrent call; undo the debit we just took.
-    await credit(userId, amount);
-    return { ok: false, reason: "already_deducted" };
+    })
+    .onConflictDoNothing({ target: structurePayments.reference })
+    .returning({ id: structurePayments.id });
+  if (!ledgered) return false; // already applied on an earlier run
+  await db
+    .update(structureAccounts)
+    .set({ balance: sql`${structureAccounts.balance} + ${amount}` })
+    .where(eq(structureAccounts.id, accountId));
+  return true;
+}
+
+/** The member's four target treasuries. A level with no geography on the
+ *  member's profile can't receive its share, so that share folds up into
+ *  National — money is always conserved, never orphaned. */
+function targetNodes(geo: {
+  stateId: string | null;
+  lgaId: string | null;
+  ward: string | null;
+  stateName: string | null;
+  lgaName: string | null;
+}): Record<StructureLevel, StructureNode | null> {
+  return {
+    national: NATIONAL_NODE,
+    state: geo.stateId
+      ? { key: `state:${geo.stateId}`, level: "state", name: `${geo.stateName ?? "State"} State`, stateId: geo.stateId }
+      : null,
+    lga:
+      geo.lgaId && geo.stateId
+        ? { key: `lga:${geo.lgaId}`, level: "lga", name: `${geo.lgaName ?? "LGA"} LGA`, stateId: geo.stateId, lgaId: geo.lgaId }
+        : null,
+    ward:
+      geo.lgaId && geo.ward && geo.stateId
+        ? {
+            key: `ward:${geo.lgaId}:${geo.ward}`,
+            level: "ward",
+            name: geo.ward,
+            stateId: geo.stateId,
+            lgaId: geo.lgaId,
+            ward: geo.ward,
+          }
+        : null,
+  };
+}
+
+/** Distribute an already-charged dues amount across the member's treasuries.
+ *  Idempotent: safe to call repeatedly for the same (userId, monthKey). */
+async function distributeDues(
+  userId: string,
+  amount: number,
+  monthKey: string,
+  monthName: string,
+  geo: Parameters<typeof targetNodes>[0],
+): Promise<DuesShares> {
+  const shares = computeShares(amount);
+  const nodes = targetNodes(geo);
+
+  // Fold any level the member can't be placed at into National.
+  for (const level of ["ward", "lga", "state"] as StructureLevel[]) {
+    if (!nodes[level] && shares[level] > 0) {
+      shares.national += shares[level];
+      shares[level] = 0;
+    }
   }
+
+  for (const level of SPLIT_ORDER) {
+    const node = nodes[level];
+    if (!node || shares[level] <= 0) continue;
+    await creditStructureOnce(
+      node,
+      shares[level],
+      `duesshare_${userId}_${monthKey}_${level}`,
+      userId,
+      `Dues share (${level}) — ${monthName}`,
+    );
+  }
+  return shares;
+}
+
+/** A member's own monthly dues (by their category) — for reminders and the
+ *  Finance dues card. 0 for non-paying tiers. */
+export async function memberDuesAmount(
+  userId: string,
+): Promise<{ amount: number; category: MembershipCategory }> {
+  const [row] = await db
+    .select({ category: identities.membershipCategory })
+    .from(identities)
+    .where(eq(identities.userId, userId))
+    .limit(1);
+  const category = (row?.category ?? "regular") as MembershipCategory;
+  return { amount: duesForCategory(category), category };
+}
+
+export interface DuesChargeResult {
+  ok: boolean;
+  reason?: "non_paying" | "insufficient_funds";
+  amount?: number;
+  category?: MembershipCategory;
+  shares?: DuesShares;
+  /** True when this month was already charged before (we only re-ran the
+   *  idempotent distribution to heal any partial prior run). */
+  alreadyCharged?: boolean;
+}
+
+/**
+ * Charge a member's monthly dues by their membership category and split the
+ * money down the structure (§7.3). Debits the member exactly once (gated by
+ * `dues_<userId>_<monthKey>`), then distributes the four shares idempotently.
+ * Non-paying categories (student/honorary/…) are a no-op.
+ */
+export async function chargeMonthlyDues(
+  userId: string,
+  monthKey: string,
+  monthName: string,
+): Promise<DuesChargeResult> {
+  // Category (→ amount) + the geography the shares flow to, in one round trip.
+  const [member] = await db
+    .select({
+      category: identities.membershipCategory,
+      stateId: profiles.stateId,
+      lgaId: profiles.lgaId,
+      ward: profiles.ward,
+      stateName: states.name,
+      lgaName: lgas.name,
+    })
+    .from(profiles)
+    .leftJoin(identities, eq(identities.userId, profiles.userId))
+    .leftJoin(states, eq(states.id, profiles.stateId))
+    .leftJoin(lgas, eq(lgas.id, profiles.lgaId))
+    .where(eq(profiles.userId, userId))
+    .limit(1);
+
+  const category = (member?.category ?? "regular") as MembershipCategory;
+  if (!isPayingCategory(category)) return { ok: false, reason: "non_paying", category };
+
+  const amount = duesForCategory(category);
+  const geo = {
+    stateId: member?.stateId ?? null,
+    lgaId: member?.lgaId ?? null,
+    ward: member?.ward ?? null,
+    stateName: member?.stateName ?? null,
+    lgaName: member?.lgaName ?? null,
+  };
+  const duesRef = `dues_${userId}_${monthKey}`;
+
+  // 1) Charge the member exactly once. The unique `reference` is the gate.
+  let alreadyCharged = false;
+  const debited = await tryDebit(userId, amount);
+  if (debited) {
+    try {
+      await db.insert(payments).values({
+        userId,
+        kind: "dues",
+        status: "completed",
+        amount,
+        reference: duesRef,
+        description: `Monthly dues — ${monthName}`,
+        completedAt: new Date(),
+      });
+    } catch {
+      // A concurrent charge already recorded this month — undo our debit and
+      // fall through to (idempotently) ensure the shares are distributed.
+      await credit(userId, amount);
+      alreadyCharged = true;
+    }
+  } else {
+    // Couldn't debit: either already charged this month, or genuinely short.
+    const [existing] = await db
+      .select({ id: payments.id })
+      .from(payments)
+      .where(eq(payments.reference, duesRef))
+      .limit(1);
+    if (!existing) return { ok: false, reason: "insufficient_funds", amount, category };
+    alreadyCharged = true;
+  }
+
+  // 2) Distribute (idempotent) — heals any partial prior run too.
+  const shares = await distributeDues(userId, amount, monthKey, monthName, geo);
+  return { ok: true, amount, category, shares, alreadyCharged };
 }
