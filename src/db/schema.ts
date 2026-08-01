@@ -695,6 +695,31 @@ export const payments = pgTable(
   ],
 );
 
+/* ----------------------------------------------------------------
+   Saved payout accounts — a member's own bank accounts for
+   withdrawals, so they don't re-type + re-verify every time. The
+   account name is captured from the gateway's name-enquiry at save
+   time (never trusted from the client). */
+export const payoutAccounts = pgTable(
+  "payout_accounts",
+  {
+    id: pk(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    bankCode: text("bank_code").notNull(),
+    bankName: text("bank_name").notNull(),
+    accountNumber: text("account_number").notNull(),
+    accountName: text("account_name").notNull(), // resolved via name-enquiry
+    isDefault: boolean("is_default").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // a member's saved accounts, and dedupe the same account per member
+    uniqueIndex("payout_accounts_unique_idx").on(t.userId, t.bankCode, t.accountNumber),
+  ],
+);
+
 /* ============================================================
    Structure accounts — the National / State / LGA / Ward
    treasuries (handbook §7.2). Each is "identical in shape to a

@@ -5,6 +5,7 @@ import {
   identities,
   lgas,
   payments,
+  payoutAccounts,
   profiles,
   states,
   structureAccounts,
@@ -687,4 +688,72 @@ export async function creditReservedFunding(
   }
 
   return { ok: false };
+}
+
+/* ============================================================
+   Saved payout accounts — a member's own bank accounts for
+   withdrawals, so they pick one instead of re-typing + re-verifying
+   every time. The account name is captured from the gateway at save
+   time (see savePayoutAccount in actions/wallet.ts).
+   ============================================================ */
+
+export interface PayoutAccountDTO {
+  id: string;
+  bankCode: string;
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+  isDefault: boolean;
+}
+
+export async function listPayoutAccounts(userId: string): Promise<PayoutAccountDTO[]> {
+  const rows = await db
+    .select()
+    .from(payoutAccounts)
+    .where(eq(payoutAccounts.userId, userId))
+    .orderBy(desc(payoutAccounts.isDefault), desc(payoutAccounts.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    bankCode: r.bankCode,
+    bankName: r.bankName,
+    accountNumber: r.accountNumber,
+    accountName: r.accountName,
+    isDefault: r.isDefault,
+  }));
+}
+
+/** Save (or refresh) a member's payout account. The first one saved becomes
+ *  the default; re-saving the same account updates its resolved name. */
+export async function addPayoutAccount(input: {
+  userId: string;
+  bankCode: string;
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+}): Promise<PayoutAccountDTO> {
+  const existing = await db
+    .select({ id: payoutAccounts.id })
+    .from(payoutAccounts)
+    .where(eq(payoutAccounts.userId, input.userId))
+    .limit(1);
+  const [row] = await db
+    .insert(payoutAccounts)
+    .values({ ...input, isDefault: existing.length === 0 })
+    .onConflictDoUpdate({
+      target: [payoutAccounts.userId, payoutAccounts.bankCode, payoutAccounts.accountNumber],
+      set: { accountName: input.accountName, bankName: input.bankName },
+    })
+    .returning();
+  return {
+    id: row.id,
+    bankCode: row.bankCode,
+    bankName: row.bankName,
+    accountNumber: row.accountNumber,
+    accountName: row.accountName,
+    isDefault: row.isDefault,
+  };
+}
+
+export async function deletePayoutAccount(userId: string, id: string): Promise<void> {
+  await db.delete(payoutAccounts).where(and(eq(payoutAccounts.id, id), eq(payoutAccounts.userId, userId)));
 }

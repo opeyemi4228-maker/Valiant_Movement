@@ -178,6 +178,57 @@ export async function resolveWithdrawalAccount(
   }
 }
 
+/* --------------------------- saved payout accounts --------------------------- */
+
+export async function listPayoutAccounts(): Promise<wdb.PayoutAccountDTO[]> {
+  const u = await me();
+  if (!u) return [];
+  try {
+    return await withRetry(() => wdb.listPayoutAccounts(u.id));
+  } catch (err) {
+    console.error("listPayoutAccounts failed:", err);
+    return [];
+  }
+}
+
+/** Verify a bank account (name enquiry) and save it for reuse at withdrawal. */
+export async function savePayoutAccount(
+  bankCode: string,
+  accountNumber: string,
+  bankName: string,
+): Promise<{ ok: boolean; account?: wdb.PayoutAccountDTO; error?: string }> {
+  const u = await me();
+  if (!u) return { ok: false, error: "Sign in to save an account." };
+  if (!hasMonnify()) return { ok: false, error: "Payments aren't connected yet." };
+  if (!/^\d{10}$/.test(accountNumber)) return { ok: false, error: "Enter a valid 10-digit account number." };
+  try {
+    const resolved = await monnify.validateAccount(accountNumber, bankCode);
+    const account = await wdb.addPayoutAccount({
+      userId: u.id,
+      bankCode,
+      bankName,
+      accountNumber,
+      accountName: resolved.accountName,
+    });
+    return { ok: true, account };
+  } catch (err) {
+    console.error("savePayoutAccount failed:", err);
+    return { ok: false, error: "Couldn't verify that account — check the number and bank." };
+  }
+}
+
+export async function deletePayoutAccount(id: string): Promise<{ ok: boolean }> {
+  const u = await me();
+  if (!u) return { ok: false };
+  try {
+    await wdb.deletePayoutAccount(u.id, id);
+    return { ok: true };
+  } catch (err) {
+    console.error("deletePayoutAccount failed:", err);
+    return { ok: false };
+  }
+}
+
 export async function requestWithdrawal(
   amountNaira: number,
   bankCode: string,

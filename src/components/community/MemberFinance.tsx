@@ -22,19 +22,23 @@ import {
   AlertTriangle,
   RefreshCcw,
   Copy,
-  CreditCard,
+  Trash2,
+  Plus,
 } from "lucide-react";
 import { naira, campaigns } from "@/data/finance";
 import { ensureDuesNotifications, getDuesStatus } from "@/app/actions/finance";
 import {
   getWalletSummary,
-  initializeDeposit,
   verifyDeposit,
   listWithdrawalBanks,
   resolveWithdrawalAccount,
   requestWithdrawal,
+  savePayoutAccount,
+  listPayoutAccounts,
+  deletePayoutAccount,
   type WalletSummary,
 } from "@/app/actions/wallet";
+import type { PayoutAccountDTO } from "@/lib/wallet-db";
 import type { PaymentDTO } from "@/lib/wallet-db";
 import { fmtNaira, type PaymentKind } from "@/lib/wallet-types";
 
@@ -372,8 +376,9 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
           onClose={() => setModal(null)}
           configured={summary?.monnifyConfigured ?? false}
           reservedAccounts={summary?.reservedAccounts ?? []}
+          reservedPending={summary?.reservedPending ?? false}
           holderName={name}
-          onStarted={(msg) => flash(msg)}
+          onCopied={(msg) => flash(msg)}
         />
       )}
       {modal === "withdrawal" && (
@@ -501,63 +506,38 @@ function ReservedAccountCard({
 
 /* ------------------------------ Deposit modal ------------------------------ */
 
-const QUICK = [5_000, 10_000, 25_000, 50_000];
-
 function DepositModal({
   onClose,
   configured,
   reservedAccounts,
+  reservedPending,
   holderName,
-  onStarted,
+  onCopied,
 }: {
   onClose: () => void;
   configured: boolean;
   reservedAccounts: { accountNumber: string; bankName: string; bankCode: string; accountName?: string }[];
+  reservedPending: boolean;
   holderName: string;
-  onStarted: (msg: string) => void;
+  onCopied: (msg: string) => void;
 }) {
-  const hasReserved = reservedAccounts.length > 0;
-  const [mode, setMode] = useState<"transfer" | "card">(hasReserved ? "transfer" : "card");
   const [bankIdx, setBankIdx] = useState(0);
-  const [raw, setRaw] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const amount = Number(raw.replace(/\D/g, "")) || 0;
-  const canSubmit = amount >= 100 && !submitting && configured;
+  const hasReserved = reservedAccounts.length > 0;
   const acct = reservedAccounts[Math.min(bankIdx, reservedAccounts.length - 1)];
-
-  async function submitCard() {
-    if (!canSubmit) return;
-    setSubmitting(true);
-    setError(null);
-    const res = await initializeDeposit(amount);
-    if (res.ok && res.checkoutUrl) {
-      onStarted("Opening secure card checkout…");
-      window.location.href = res.checkoutUrl; // Monnify's PCI-compliant card page
-      return;
-    }
-    setSubmitting(false);
-    setError(res.error ?? "Couldn't start the deposit — please try again.");
-  }
 
   async function copyNumber() {
     if (!acct) return;
     try {
       await navigator.clipboard.writeText(acct.accountNumber);
-      onStarted("✅ Account number copied");
+      onCopied("✅ Account number copied");
     } catch {
-      onStarted(acct.accountNumber);
+      onCopied(acct.accountNumber);
     }
   }
 
-  const tabCls = (on: boolean) =>
-    `flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition ${
-      on ? "bg-white text-[var(--color-brand-strong)] shadow-sm" : "text-[var(--color-muted)]"
-    }`;
-
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={submitting ? undefined : onClose} />
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <div className="animate-rise relative w-full max-w-md overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl">
         <div className="flex items-center justify-between border-b border-[var(--color-line)] p-4">
           <div className="flex items-center gap-2.5">
@@ -566,38 +546,19 @@ function DepositModal({
             </span>
             <div>
               <h3 className="font-bold text-[var(--color-navy)]">Add money</h3>
-              <p className="text-[11px] text-[var(--color-faint)]">Fund your Valiant Wallet</p>
+              <p className="text-[11px] text-[var(--color-faint)]">Fund by bank transfer</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            disabled={submitting}
-            className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)] disabled:opacity-40"
+            className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="p-5">
-          {!configured && (
-            <div className="mb-4 flex items-start gap-2.5 rounded-xl bg-[var(--color-amber)]/10 p-3 text-[13px] text-[var(--color-ink-soft)]">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-amber)]" />
-              Payments aren&apos;t connected yet. An admin needs to add Monnify API keys before deposits can be made.
-            </div>
-          )}
-
-          {hasReserved && (
-            <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-[var(--color-surface-2)] p-1">
-              <button onClick={() => setMode("transfer")} className={tabCls(mode === "transfer")}>
-                <Landmark className="h-3.5 w-3.5" /> Bank transfer
-              </button>
-              <button onClick={() => setMode("card")} className={tabCls(mode === "card")}>
-                <CreditCard className="h-3.5 w-3.5" /> Card
-              </button>
-            </div>
-          )}
-
-          {mode === "transfer" && hasReserved && acct ? (
+          {hasReserved && acct ? (
             <div>
               <p className="text-[13px] leading-relaxed text-[var(--color-ink-soft)]">
                 Transfer any amount to your <span className="font-semibold">dedicated account</span> below. Your wallet is
@@ -636,49 +597,16 @@ function DepositModal({
                 <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Secured by Monnify · credited automatically
               </p>
             </div>
+          ) : configured || reservedPending ? (
+            <div className="flex items-start gap-2.5 rounded-xl bg-[var(--color-surface-2)] p-4 text-[13px] text-[var(--color-ink-soft)]">
+              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-[var(--color-brand-strong)]" />
+              Your dedicated account is being set up. Close this and reopen in a moment — you&apos;ll see your account
+              number here to fund by transfer.
+            </div>
           ) : (
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Amount</label>
-              <div className="mt-1.5 flex items-center rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 focus-within:border-[var(--color-brand)] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--color-brand)]/12">
-                <span className="text-2xl font-extrabold text-[var(--color-faint)]">₦</span>
-                <input
-                  autoFocus
-                  inputMode="numeric"
-                  value={amount ? amount.toLocaleString() : ""}
-                  onChange={(e) => setRaw(e.target.value)}
-                  placeholder="0"
-                  className="w-full bg-transparent py-3.5 pl-2 text-2xl font-extrabold tabular-nums text-[var(--color-ink)] outline-none placeholder:text-[var(--color-faint)]"
-                />
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-2">
-                {QUICK.map((q) => (
-                  <button
-                    key={q}
-                    onClick={() => setRaw(String(q))}
-                    className="rounded-full border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
-                  >
-                    {naira(q, true)}
-                  </button>
-                ))}
-              </div>
-
-              {error && <p className="mt-3 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
-
-              <button
-                onClick={submitCard}
-                disabled={!canSubmit}
-                className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl gradient-brand py-3.5 text-sm font-bold text-white shadow-sm transition enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {submitting ? (
-                  <><Loader2 className="h-4 w-4 animate-spin" /> Opening…</>
-                ) : (
-                  <><CreditCard className="h-4 w-4" /> Pay {amount ? naira(amount) : ""} by card</>
-                )}
-              </button>
-              <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-[var(--color-faint)]">
-                <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Secured by Monnify · card &amp; USSD
-              </p>
+            <div className="flex items-start gap-2.5 rounded-xl bg-[var(--color-amber)]/10 p-4 text-[13px] text-[var(--color-ink-soft)]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--color-amber)]" />
+              Payments aren&apos;t connected yet. An admin needs to add Monnify API keys before deposits can be made.
             </div>
           )}
         </div>
@@ -700,41 +628,54 @@ function WithdrawalModal({
   onClose: () => void;
   onDone: (msg: string) => void;
 }) {
+  const [saved, setSaved] = useState<PayoutAccountDTO[] | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false); // showing the "new account" form
+
   const [banks, setBanks] = useState<{ name: string; code: string }[]>([]);
   const [banksLoading, setBanksLoading] = useState(true);
   const [raw, setRaw] = useState("");
   const [bankCode, setBankCode] = useState("");
   const [accountNumber, setAccountNumber] = useState("");
   const [accountName, setAccountName] = useState<string | null>(null);
+  const [saveForNext, setSaveForNext] = useState(true);
   const [resolving, setResolving] = useState(false);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Load saved payout accounts + the bank list up front.
   useEffect(() => {
     const id = setTimeout(() => {
       if (!configured) {
         setBanksLoading(false);
+        setSaved([]);
         return;
       }
+      listPayoutAccounts().then((accts) => {
+        setSaved(accts);
+        const def = accts.find((a) => a.isDefault) ?? accts[0];
+        if (def) setSelectedId(def.id);
+        else setAdding(true); // no saved accounts → go straight to the add form
+      });
       listWithdrawalBanks().then((b) => {
         setBanks(b);
         setBanksLoading(false);
       });
-    }, 0); // after paint — no sync setState in the effect body
+    }, 0);
     return () => clearTimeout(id);
   }, [configured]);
 
   const amount = Number(raw.replace(/\D/g, "")) || 0;
   const overBalance = amount > balance;
 
-  // Resolve the account name once both bank + a full 10-digit number are set.
+  // Verify a freshly typed account (only while adding a new one).
   useEffect(() => {
     let alive = true;
     const id = setTimeout(() => {
       setAccountName(null);
       setResolveError(null);
-      if (!bankCode || accountNumber.length !== 10) return;
+      if (!adding || !bankCode || accountNumber.length !== 10) return;
       setResolving(true);
       resolveWithdrawalAccount(accountNumber, bankCode).then((res) => {
         if (!alive) return;
@@ -742,19 +683,43 @@ function WithdrawalModal({
         if (res.ok) setAccountName(res.accountName ?? null);
         else setResolveError(res.error ?? "Couldn't verify that account.");
       });
-    }, 0); // after paint — no sync setState in the effect body
+    }, 0);
     return () => { alive = false; clearTimeout(id); };
-  }, [bankCode, accountNumber]);
+  }, [adding, bankCode, accountNumber]);
 
-  const canSubmit = configured && amount >= 500 && !overBalance && !!accountName && !submitting;
+  const selected = saved?.find((s) => s.id === selectedId) ?? null;
+  const bankNameFor = (code: string) => banks.find((b) => b.code === code)?.name ?? "";
+  // The destination that will actually be used.
+  const dest = adding
+    ? accountName
+      ? { bankCode, accountNumber, accountName, bankName: bankNameFor(bankCode) }
+      : null
+    : selected
+    ? { bankCode: selected.bankCode, accountNumber: selected.accountNumber, accountName: selected.accountName, bankName: selected.bankName }
+    : null;
+
+  const canSubmit = configured && amount >= 500 && !overBalance && !!dest && !submitting;
+
+  async function removeSaved(id: string) {
+    await deletePayoutAccount(id);
+    const next = (saved ?? []).filter((a) => a.id !== id);
+    setSaved(next);
+    if (selectedId === id) setSelectedId(next[0]?.id ?? null);
+    if (next.length === 0) setAdding(true);
+  }
 
   async function submit() {
-    if (!canSubmit) return;
+    if (!canSubmit || !dest) return;
     setSubmitting(true);
     setError(null);
-    const res = await requestWithdrawal(amount, bankCode, accountNumber);
+    // Save the new account for next time (best-effort) before withdrawing.
+    if (adding && saveForNext) {
+      const res = await savePayoutAccount(dest.bankCode, dest.accountNumber, dest.bankName);
+      if (res.ok && res.account) setSaved((prev) => [res.account!, ...(prev ?? []).filter((a) => a.id !== res.account!.id)]);
+    }
+    const res = await requestWithdrawal(amount, dest.bankCode, dest.accountNumber);
     setSubmitting(false);
-    if (res.ok) onDone(`Withdrawal to ${accountName} is on its way.`);
+    if (res.ok) onDone(`Withdrawal to ${dest.accountName} is on its way.`);
     else setError(res.error ?? "Couldn't process the withdrawal — please try again.");
   }
 
@@ -804,33 +769,79 @@ function WithdrawalModal({
           </div>
           {overBalance && <p className="mt-1.5 text-xs font-medium text-[var(--color-danger)]">Amount exceeds your available balance.</p>}
 
-          <label className="mt-5 block text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Bank</label>
-          <select
-            value={bankCode}
-            onChange={(e) => setBankCode(e.target.value)}
-            disabled={!configured || banksLoading}
-            className="mt-1.5 w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5 py-3 text-sm outline-none transition focus:border-[var(--color-brand)] focus:bg-white disabled:opacity-50"
-          >
-            <option value="">{banksLoading ? "Loading banks…" : "Select your bank…"}</option>
-            {banks.map((b) => (
-              <option key={b.code} value={b.code}>{b.name}</option>
-            ))}
-          </select>
-
-          <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Account number</label>
-          <input
-            value={accountNumber}
-            onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, "").slice(0, 10))}
-            inputMode="numeric"
-            placeholder="0123456789"
-            disabled={!configured}
-            className="mt-1.5 w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5 py-3 text-sm tracking-wider outline-none transition focus:border-[var(--color-brand)] focus:bg-white disabled:opacity-50"
-          />
-          <div className="mt-2 min-h-[20px] text-xs">
-            {resolving && <span className="flex items-center gap-1.5 text-[var(--color-muted)]"><Loader2 className="h-3 w-3 animate-spin" /> Verifying account…</span>}
-            {!resolving && accountName && <span className="flex items-center gap-1.5 font-semibold text-[var(--color-green)]"><CheckCircle2 className="h-3.5 w-3.5" /> {accountName}</span>}
-            {!resolving && resolveError && <span className="text-[var(--color-danger)]">{resolveError}</span>}
+          {/* ---------------- Destination ---------------- */}
+          <div className="mt-5 flex items-center justify-between">
+            <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Withdraw to</label>
+            {saved && saved.length > 0 && (
+              <button
+                onClick={() => setAdding((v) => !v)}
+                className="flex items-center gap-1 text-[11px] font-bold text-[var(--color-brand-strong)]"
+              >
+                {adding ? "Use a saved account" : (<><Plus className="h-3 w-3" /> New account</>)}
+              </button>
+            )}
           </div>
+
+          {saved === null ? (
+            <div className="mt-2 flex items-center gap-2 text-xs text-[var(--color-muted)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading your accounts…</div>
+          ) : !adding && saved.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              {saved.map((a) => (
+                <div
+                  key={a.id}
+                  className={`flex items-center gap-3 rounded-xl border p-3 transition ${
+                    selectedId === a.id ? "border-[var(--color-brand)] bg-[var(--color-brand-tint)]" : "border-[var(--color-line)] bg-white"
+                  }`}
+                >
+                  <button onClick={() => setSelectedId(a.id)} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                    <span className={`grid size-4 shrink-0 place-items-center rounded-full border ${selectedId === a.id ? "border-[var(--color-brand)]" : "border-[var(--color-faint)]"}`}>
+                      {selectedId === a.id && <span className="size-2 rounded-full bg-[var(--color-brand)]" />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-bold text-[var(--color-ink)]">{a.accountName}</span>
+                      <span className="block truncate text-xs text-[var(--color-muted)]">{a.accountNumber} · {a.bankName}</span>
+                    </span>
+                  </button>
+                  <button onClick={() => removeSaved(a.id)} aria-label="Remove account" className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--color-faint)] transition hover:bg-white hover:text-[var(--color-danger)]">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-2">
+              <select
+                value={bankCode}
+                onChange={(e) => setBankCode(e.target.value)}
+                disabled={!configured || banksLoading}
+                className="w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5 py-3 text-sm outline-none transition focus:border-[var(--color-brand)] focus:bg-white disabled:opacity-50"
+              >
+                <option value="">{banksLoading ? "Loading banks…" : "Select your bank…"}</option>
+                {banks.map((b) => (
+                  <option key={b.code} value={b.code}>{b.name}</option>
+                ))}
+              </select>
+              <input
+                value={accountNumber}
+                onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                inputMode="numeric"
+                placeholder="0123456789"
+                disabled={!configured}
+                className="mt-2 w-full rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-3.5 py-3 text-sm tracking-wider outline-none transition focus:border-[var(--color-brand)] focus:bg-white disabled:opacity-50"
+              />
+              <div className="mt-2 min-h-[20px] text-xs">
+                {resolving && <span className="flex items-center gap-1.5 text-[var(--color-muted)]"><Loader2 className="h-3 w-3 animate-spin" /> Verifying account…</span>}
+                {!resolving && accountName && <span className="flex items-center gap-1.5 font-semibold text-[var(--color-green)]"><CheckCircle2 className="h-3.5 w-3.5" /> {accountName}</span>}
+                {!resolving && resolveError && <span className="text-[var(--color-danger)]">{resolveError}</span>}
+              </div>
+              {accountName && (
+                <label className="mt-1 flex cursor-pointer items-center gap-2 text-[13px] text-[var(--color-ink-soft)]">
+                  <input type="checkbox" checked={saveForNext} onChange={(e) => setSaveForNext(e.target.checked)} className="size-4 accent-[var(--color-brand)]" />
+                  Save this account for next time
+                </label>
+              )}
+            </div>
+          )}
 
           {error && <p className="mt-3 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
 

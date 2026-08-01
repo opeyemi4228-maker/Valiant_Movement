@@ -85,6 +85,13 @@
       "when": 1785567292498,
       "tag": "0011_furry_red_ghost",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785569592855,
+      "tag": "0012_happy_gunslinger",
+      "breakpoints": true
     }
   ]
 }
