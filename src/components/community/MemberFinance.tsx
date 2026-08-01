@@ -22,6 +22,7 @@ import {
   AlertTriangle,
   RefreshCcw,
   Copy,
+  CreditCard,
 } from "lucide-react";
 import { naira, campaigns } from "@/data/finance";
 import { ensureDuesNotifications, getDuesStatus } from "@/app/actions/finance";
@@ -217,7 +218,7 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
 
         {/* ====================== Dedicated account ====================== */}
         {summary && summary.reservedAccounts.length > 0 ? (
-          <ReservedAccountCard accounts={summary.reservedAccounts} onCopied={flash} />
+          <ReservedAccountCard accounts={summary.reservedAccounts} holderName={name} onCopied={flash} />
         ) : summary?.reservedPending ? (
           <div className="mt-4 rounded-2xl border border-dashed border-[var(--color-line)] bg-white p-4 text-sm text-[var(--color-muted)]">
             <span className="font-semibold text-[var(--color-ink)]">Your dedicated account is being set up.</span>{" "}
@@ -370,6 +371,8 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
         <DepositModal
           onClose={() => setModal(null)}
           configured={summary?.monnifyConfigured ?? false}
+          reservedAccounts={summary?.reservedAccounts ?? []}
+          holderName={name}
           onStarted={(msg) => flash(msg)}
         />
       )}
@@ -438,9 +441,11 @@ function TxRow({ t }: { t: PaymentDTO }) {
 
 function ReservedAccountCard({
   accounts,
+  holderName,
   onCopied,
 }: {
   accounts: { accountNumber: string; bankName: string; bankCode: string; accountName?: string }[];
+  holderName: string;
   onCopied: (msg: string) => void;
 }) {
   const [i, setI] = useState(0);
@@ -480,8 +485,7 @@ function ReservedAccountCard({
         <div className="min-w-0">
           <div className="text-lg font-extrabold tracking-wide text-[var(--color-ink)]">{a.accountNumber}</div>
           <div className="truncate text-xs text-[var(--color-muted)]">
-            {a.bankName}
-            {a.accountName ? ` · ${a.accountName}` : ""}
+            {a.bankName} · {holderName}
           </div>
         </div>
         <button
@@ -502,31 +506,54 @@ const QUICK = [5_000, 10_000, 25_000, 50_000];
 function DepositModal({
   onClose,
   configured,
+  reservedAccounts,
+  holderName,
   onStarted,
 }: {
   onClose: () => void;
   configured: boolean;
+  reservedAccounts: { accountNumber: string; bankName: string; bankCode: string; accountName?: string }[];
+  holderName: string;
   onStarted: (msg: string) => void;
 }) {
+  const hasReserved = reservedAccounts.length > 0;
+  const [mode, setMode] = useState<"transfer" | "card">(hasReserved ? "transfer" : "card");
+  const [bankIdx, setBankIdx] = useState(0);
   const [raw, setRaw] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const amount = Number(raw.replace(/\D/g, "")) || 0;
   const canSubmit = amount >= 100 && !submitting && configured;
+  const acct = reservedAccounts[Math.min(bankIdx, reservedAccounts.length - 1)];
 
-  async function submit() {
+  async function submitCard() {
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     const res = await initializeDeposit(amount);
     if (res.ok && res.checkoutUrl) {
-      onStarted("Redirecting you to complete the deposit securely…");
-      window.location.href = res.checkoutUrl; // full-page redirect to Monnify's hosted checkout
+      onStarted("Opening secure card checkout…");
+      window.location.href = res.checkoutUrl; // Monnify's PCI-compliant card page
       return;
     }
     setSubmitting(false);
     setError(res.error ?? "Couldn't start the deposit — please try again.");
   }
+
+  async function copyNumber() {
+    if (!acct) return;
+    try {
+      await navigator.clipboard.writeText(acct.accountNumber);
+      onStarted("✅ Account number copied");
+    } catch {
+      onStarted(acct.accountNumber);
+    }
+  }
+
+  const tabCls = (on: boolean) =>
+    `flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold transition ${
+      on ? "bg-white text-[var(--color-brand-strong)] shadow-sm" : "text-[var(--color-muted)]"
+    }`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
@@ -538,8 +565,8 @@ function DepositModal({
               <ArrowDownLeft className="h-5 w-5" />
             </span>
             <div>
-              <h3 className="font-bold text-[var(--color-navy)]">Deposit to wallet</h3>
-              <p className="text-[11px] text-[var(--color-faint)]">Top up your Valiant Wallet via Monnify</p>
+              <h3 className="font-bold text-[var(--color-navy)]">Add money</h3>
+              <p className="text-[11px] text-[var(--color-faint)]">Fund your Valiant Wallet</p>
             </div>
           </div>
           <button
@@ -558,47 +585,102 @@ function DepositModal({
               Payments aren&apos;t connected yet. An admin needs to add Monnify API keys before deposits can be made.
             </div>
           )}
-          <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Amount</label>
-          <div className="mt-1.5 flex items-center rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 focus-within:border-[var(--color-brand)] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--color-brand)]/12">
-            <span className="text-2xl font-extrabold text-[var(--color-faint)]">₦</span>
-            <input
-              autoFocus
-              inputMode="numeric"
-              value={amount ? amount.toLocaleString() : ""}
-              onChange={(e) => setRaw(e.target.value)}
-              placeholder="0"
-              className="w-full bg-transparent py-3.5 pl-2 text-2xl font-extrabold tabular-nums text-[var(--color-ink)] outline-none placeholder:text-[var(--color-faint)]"
-            />
-          </div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
-            {QUICK.map((q) => (
-              <button
-                key={q}
-                onClick={() => setRaw(String(q))}
-                className="rounded-full border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
-              >
-                {naira(q, true)}
+          {hasReserved && (
+            <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-[var(--color-surface-2)] p-1">
+              <button onClick={() => setMode("transfer")} className={tabCls(mode === "transfer")}>
+                <Landmark className="h-3.5 w-3.5" /> Bank transfer
               </button>
-            ))}
-          </div>
+              <button onClick={() => setMode("card")} className={tabCls(mode === "card")}>
+                <CreditCard className="h-3.5 w-3.5" /> Card
+              </button>
+            </div>
+          )}
 
-          {error && <p className="mt-3 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
+          {mode === "transfer" && hasReserved && acct ? (
+            <div>
+              <p className="text-[13px] leading-relaxed text-[var(--color-ink-soft)]">
+                Transfer any amount to your <span className="font-semibold">dedicated account</span> below. Your wallet is
+                credited automatically the moment it lands — this account is permanent, so you can save it.
+              </p>
 
-          <button
-            onClick={submit}
-            disabled={!canSubmit}
-            className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl gradient-brand py-3.5 text-sm font-bold text-white shadow-sm transition enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {submitting ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> Redirecting…</>
-            ) : (
-              <><Banknote className="h-4 w-4" /> Deposit {amount ? naira(amount) : ""}</>
-            )}
-          </button>
-          <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-[var(--color-faint)]">
-            <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Secured by Monnify · card, bank transfer or USSD
-          </p>
+              {reservedAccounts.length > 1 && (
+                <select
+                  value={bankIdx}
+                  onChange={(e) => setBankIdx(Number(e.target.value))}
+                  className="mt-3 w-full rounded-xl border border-[var(--color-line)] bg-white px-3 py-2 text-sm font-semibold"
+                >
+                  {reservedAccounts.map((x, k) => (
+                    <option key={k} value={k}>
+                      {x.bankName || `Bank ${k + 1}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <div className="mt-3 rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] p-4">
+                <div className="text-[11px] font-bold uppercase tracking-wide text-[var(--color-faint)]">{acct.bankName}</div>
+                <div className="mt-1 flex items-center justify-between gap-3">
+                  <span className="text-2xl font-extrabold tracking-wide text-[var(--color-ink)]">{acct.accountNumber}</span>
+                  <button
+                    onClick={copyNumber}
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--color-navy)] px-3 py-2 text-xs font-bold text-white transition hover:opacity-90 active:scale-95"
+                  >
+                    <Copy className="h-3.5 w-3.5" /> Copy
+                  </button>
+                </div>
+                <div className="mt-1 text-xs text-[var(--color-muted)]">{holderName}</div>
+              </div>
+
+              <p className="mt-3 flex items-center justify-center gap-1 text-[11px] text-[var(--color-faint)]">
+                <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Secured by Monnify · credited automatically
+              </p>
+            </div>
+          ) : (
+            <div>
+              <label className="text-xs font-semibold uppercase tracking-wide text-[var(--color-faint)]">Amount</label>
+              <div className="mt-1.5 flex items-center rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface-2)] px-4 focus-within:border-[var(--color-brand)] focus-within:bg-white focus-within:ring-4 focus-within:ring-[var(--color-brand)]/12">
+                <span className="text-2xl font-extrabold text-[var(--color-faint)]">₦</span>
+                <input
+                  autoFocus
+                  inputMode="numeric"
+                  value={amount ? amount.toLocaleString() : ""}
+                  onChange={(e) => setRaw(e.target.value)}
+                  placeholder="0"
+                  className="w-full bg-transparent py-3.5 pl-2 text-2xl font-extrabold tabular-nums text-[var(--color-ink)] outline-none placeholder:text-[var(--color-faint)]"
+                />
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {QUICK.map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => setRaw(String(q))}
+                    className="rounded-full border border-[var(--color-line)] px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
+                  >
+                    {naira(q, true)}
+                  </button>
+                ))}
+              </div>
+
+              {error && <p className="mt-3 text-xs font-medium text-[var(--color-danger)]">{error}</p>}
+
+              <button
+                onClick={submitCard}
+                disabled={!canSubmit}
+                className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl gradient-brand py-3.5 text-sm font-bold text-white shadow-sm transition enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {submitting ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Opening…</>
+                ) : (
+                  <><CreditCard className="h-4 w-4" /> Pay {amount ? naira(amount) : ""} by card</>
+                )}
+              </button>
+              <p className="mt-2.5 flex items-center justify-center gap-1 text-[11px] text-[var(--color-faint)]">
+                <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Secured by Monnify · card &amp; USSD
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>
