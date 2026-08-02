@@ -10,6 +10,14 @@ export interface FeedComment {
   at: string;
 }
 
+export interface PostLiker {
+  id: string;
+  name: string;
+  avatar?: string;
+  color: string;
+  isMe: boolean;
+}
+
 export interface FeedPost {
   id: string;
   authorId: string;

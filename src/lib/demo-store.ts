@@ -7,7 +7,7 @@ import type {
   ChatMedia,
   ChatMember,
 } from "@/app/actions/chat";
-import type { FeedPost, FeedComment } from "./feed-types";
+import type { FeedPost, FeedComment, PostLiker } from "./feed-types";
 import type { CallSignal } from "./call-types";
 import type { ModerationCategory } from "./moderation";
 import type { NotifInput, NotifType, NotificationDTO } from "./notif-types";
@@ -549,6 +549,15 @@ export function toggleLike(meId: string, postId: string): FeedPost | null {
   if (p.likedBy.has(meId)) p.likedBy.delete(meId);
   else p.likedBy.add(meId);
   return toPostDTO(meId, p);
+}
+
+export function getPostLikers(meId: string, postId: string): PostLiker[] {
+  const p = store().posts.find((x) => x.id === postId);
+  if (!p) return [];
+  return Array.from(p.likedBy).map((id) => {
+    const m = store().members.get(id);
+    return { id, name: m?.fullName ?? "Member", avatar: m?.avatar, color: m?.color ?? "#7a7068", isMe: id === meId };
+  });
 }
 
 export function toggleRepost(meId: string, postId: string): FeedPost | null {

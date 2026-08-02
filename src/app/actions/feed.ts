@@ -6,7 +6,7 @@ import { withRetry } from "@/lib/retry";
 import * as mem from "@/lib/demo-store";
 import * as fdb from "@/lib/feed-db";
 import { notify } from "@/lib/notify";
-import type { FeedPost } from "@/lib/feed-types";
+import type { FeedPost, PostLiker } from "@/lib/feed-types";
 import type { StoryDTO } from "@/lib/feed-db";
 import { db } from "@/db";
 import { users } from "@/db/schema";
@@ -124,6 +124,20 @@ export async function likePost(postId: string): Promise<{ ok: boolean; post?: Fe
     await notify(post.authorId, { type: "like", actorId: u.id, actorName: u.name, body: `${u.name} liked your post`, href: "home" });
   }
   return post ? { ok: true, post } : { ok: false };
+}
+
+/** Who liked a post — shown to the author and to any other viewer alike,
+ *  tapping the "N people support this" line or the like count. */
+export async function getPostLikers(postId: string): Promise<PostLiker[]> {
+  const u = await me();
+  if (!u) return [];
+  if (!usesDb(u.id)) return mem.getPostLikers(u.id, postId);
+  try {
+    return await fdb.getPostLikers(u.id, postId);
+  } catch (err) {
+    console.error("getPostLikers failed:", err);
+    return [];
+  }
 }
 
 export async function repostPost(postId: string): Promise<{ ok: boolean; post?: FeedPost }> {

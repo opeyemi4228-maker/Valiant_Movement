@@ -269,7 +269,7 @@ export async function finalizeWithdrawalOutcome(
    charge that half-completed heals on the next run.
    ============================================================ */
 
-interface StructureNode {
+export interface StructureNode {
   key: string;
   level: StructureLevel;
   name: string;
@@ -601,7 +601,10 @@ export async function ensureStructureReservedAccount(
   if (existing?.ref) return (existing.accounts as ReservedAccountView[] | null) ?? [];
   if (!hasMonnify()) return null;
 
-  const result = await provisionReserved(`structure_${key}`, name, contactEmail);
+  // Keys hold ':' and spaces (e.g. "ward:<id>:Ward 04") — Monnify's account
+  // reference must be plain, so collapse to a safe token.
+  const ref = `structure_${key.replace(/[^a-zA-Z0-9]+/g, "_")}`;
+  const result = await provisionReserved(ref, name, contactEmail);
   const accounts = toViews(result.accounts);
   await db
     .update(structureAccounts)
@@ -756,4 +759,75 @@ export async function addPayoutAccount(input: {
 
 export async function deletePayoutAccount(userId: string, id: string): Promise<void> {
   await db.delete(payoutAccounts).where(and(eq(payoutAccounts.id, id), eq(payoutAccounts.userId, userId)));
+}
+
+/* ============================================================
+   Treasury reads — a coordinator's own structure account (balance
+   + dedicated number + ledger) for the treasury dashboard (§7.2).
+   ============================================================ */
+
+export interface TreasuryView {
+  id: string;
+  key: string;
+  level: StructureLevel;
+  name: string;
+  balance: number;
+  reservedAccounts: ReservedAccountView[];
+}
+
+export interface TreasuryLedgerRow {
+  id: string;
+  kind: "dues_share" | "deposit" | "withdrawal" | "adjustment";
+  amount: number;
+  direction: "in" | "out";
+  description: string | null;
+  accountName: string | null; // withdrawal destination
+  authorizedBy: string | null;
+  createdAt: string;
+}
+
+/** Get (creating if missing) a treasury by node, with its balance + dedicated
+ *  account. Safe to call for a coordinator whose treasury has no dues yet. */
+export async function getTreasury(node: StructureNode): Promise<TreasuryView> {
+  const id = await ensureStructureAccount(node);
+  const [row] = await db
+    .select({
+      id: structureAccounts.id,
+      key: structureAccounts.key,
+      level: structureAccounts.level,
+      name: structureAccounts.name,
+      balance: structureAccounts.balance,
+      reservedAccounts: structureAccounts.reservedAccounts,
+    })
+    .from(structureAccounts)
+    .where(eq(structureAccounts.id, id))
+    .limit(1);
+  return {
+    id: row.id,
+    key: row.key,
+    level: row.level,
+    name: row.name,
+    balance: row.balance,
+    reservedAccounts: (row.reservedAccounts as ReservedAccountView[] | null) ?? [],
+  };
+}
+
+/** A treasury's statement — dues shares & deposits in, withdrawals out. */
+export async function treasuryLedger(accountId: string, limit = 25): Promise<TreasuryLedgerRow[]> {
+  const rows = await db
+    .select()
+    .from(structurePayments)
+    .where(eq(structurePayments.accountId, accountId))
+    .orderBy(desc(structurePayments.createdAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    id: r.id,
+    kind: r.kind,
+    amount: r.amount,
+    direction: r.kind === "withdrawal" ? "out" : "in",
+    description: r.description,
+    accountName: r.destinationAccountName,
+    authorizedBy: r.authorizedBy,
+    createdAt: new Date(r.createdAt).toISOString(),
+  }));
 }

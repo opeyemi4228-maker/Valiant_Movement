@@ -16,6 +16,14 @@ import {
 import { getAdminSession } from "@/lib/admin-auth";
 import { listPosts } from "@/lib/feed-db";
 import type { FeedPost } from "@/lib/feed-types";
+import {
+  getTreasury as readTreasury,
+  treasuryLedger,
+  ensureStructureReservedAccount,
+  type StructureNode,
+  type TreasuryView,
+  type TreasuryLedgerRow,
+} from "@/lib/wallet-db";
 import { withRetry } from "@/lib/retry";
 import {
   communityMemberList,
@@ -82,6 +90,74 @@ function scopeConditions(scope: AdminScope) {
   if (scope.lga) conditions.push(eq(lgas.name, scope.lga));
   if (scope.ward) conditions.push(eq(profiles.ward, scope.ward));
   return conditions;
+}
+
+/* -------------------------- Treasury (§7.2) -------------------------- */
+
+/** The coordinator's own structure node, resolved from their scoped session. */
+async function coordinatorNode(scope: AdminScope): Promise<StructureNode | null> {
+  if (scope.level === "national") return { key: "national", level: "national", name: "National HQ" };
+  if (!scope.state) return null;
+  const [st] = await db.select({ id: states.id }).from(states).where(eq(states.name, scope.state)).limit(1);
+  if (!st) return null;
+  if (scope.level === "state") {
+    return { key: `state:${st.id}`, level: "state", name: `${scope.state} State`, stateId: st.id };
+  }
+  if (!scope.lga) return null;
+  const [lg] = await db
+    .select({ id: lgas.id })
+    .from(lgas)
+    .where(and(eq(lgas.stateId, st.id), eq(lgas.name, scope.lga)))
+    .limit(1);
+  if (!lg) return null;
+  if (scope.level === "lga") {
+    return { key: `lga:${lg.id}`, level: "lga", name: `${scope.lga} LGA`, stateId: st.id, lgaId: lg.id };
+  }
+  if (scope.level === "ward" && scope.ward) {
+    return { key: `ward:${lg.id}:${scope.ward}`, level: "ward", name: scope.ward, stateId: st.id, lgaId: lg.id, ward: scope.ward };
+  }
+  return null;
+}
+
+export interface TreasuryResult {
+  ok: boolean;
+  treasury?: TreasuryView;
+  ledger?: TreasuryLedgerRow[];
+  jurisdiction?: string;
+  error?: boolean;
+}
+
+/**
+ * The coordinator's own treasury: real balance (fed by the 50/20/20/10 dues
+ * split), its dedicated account number (provisioned on demand), and the
+ * statement of everything that flowed through it. Scoped to the signed-in
+ * coordinator's jurisdiction — never trusts a client-supplied scope.
+ */
+export async function getTreasury(): Promise<TreasuryResult> {
+  const role = await requireAdminRole();
+  if (!role) return { ok: false };
+  try {
+    const node = await coordinatorNode(role.scope);
+    if (!node) return { ok: false, error: true };
+    const treasury = await withRetry(() => readTreasury(node));
+
+    // Best-effort: give the treasury its own dedicated account for funding.
+    let reservedAccounts = treasury.reservedAccounts;
+    if (reservedAccounts.length === 0) {
+      try {
+        const email = `treasury-${treasury.key.replace(/[^a-z0-9]+/gi, "-")}@valiantmovement.com`;
+        reservedAccounts = (await ensureStructureReservedAccount(treasury.id, treasury.key, treasury.name, email)) ?? [];
+      } catch (err) {
+        console.error("treasury reserved provisioning failed (non-fatal):", err);
+      }
+    }
+
+    const ledger = await withRetry(() => treasuryLedger(treasury.id));
+    return { ok: true, treasury: { ...treasury, reservedAccounts }, ledger, jurisdiction: role.jurisdiction };
+  } catch (err) {
+    console.error("getTreasury failed:", err);
+    return { ok: false, error: true };
+  }
 }
 
 /* ---------------------- Community feed monitor ---------------------- */

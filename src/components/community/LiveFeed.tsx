@@ -26,9 +26,9 @@ import {
   Smile,
   Pin,
 } from "lucide-react";
-import { loadFeedBundle, publishPost, likePost, repostPost, commentPost, bookmarkPost, publishStory } from "@/app/actions/feed";
+import { loadFeedBundle, publishPost, likePost, repostPost, commentPost, bookmarkPost, publishStory, getPostLikers } from "@/app/actions/feed";
 import type { StoryDTO } from "@/lib/feed-db";
-import type { FeedPost } from "@/lib/feed-types";
+import type { FeedPost, PostLiker } from "@/lib/feed-types";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
 import { people, trends, suggestedPeople } from "@/data/community";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
@@ -703,6 +703,7 @@ export function PostCard({
   const [comment, setComment] = useState("");
   const [burst, setBurst] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showLikers, setShowLikers] = useState(false);
 
   function submitComment() {
     const t = comment.trim();
@@ -776,9 +777,12 @@ export function PostCard({
       <div className="px-4 pb-4 pt-3">
         {/* like count line */}
         {post.likes > 0 && (
-          <p className="mb-1.5 text-[13px] font-semibold text-[var(--color-ink)]">
+          <button
+            onClick={() => setShowLikers(true)}
+            className="mb-1.5 text-[13px] font-semibold text-[var(--color-ink)] hover:underline"
+          >
             {fmt(post.likes)} {post.likes === 1 ? "person supports" : "people support"} this
-          </p>
+          </button>
         )}
 
         {/* Actions */}
@@ -877,7 +881,63 @@ export function PostCard({
           </div>
         )}
       </div>
+      {showLikers && <LikersModal postId={post.id} onClose={() => setShowLikers(false)} />}
     </article>
+  );
+}
+
+/* ------------------------------ Likers modal ------------------------------ */
+
+/** Who liked a post — open to the author and to any other viewer alike. */
+function LikersModal({ postId, onClose }: { postId: string; onClose: () => void }) {
+  const [likers, setLikers] = useState<PostLiker[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getPostLikers(postId).then((rows) => {
+      if (alive) setLikers(rows);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [postId]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+      <div
+        className="animate-rise relative flex max-h-[70vh] w-full max-w-sm flex-col overflow-hidden rounded-t-3xl bg-white shadow-xl sm:rounded-3xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-[var(--color-line)] p-4">
+          <h3 className="flex items-center gap-1.5 font-bold text-[var(--color-navy)]">
+            <Heart className="h-4 w-4 fill-current text-[var(--color-danger)]" /> Liked by
+          </h3>
+          <button
+            onClick={onClose}
+            className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="overflow-y-auto p-2">
+          {likers === null ? (
+            <div className="grid place-items-center py-10 text-sm text-[var(--color-faint)]">Loading…</div>
+          ) : likers.length === 0 ? (
+            <div className="grid place-items-center py-10 text-sm text-[var(--color-faint)]">No likes yet.</div>
+          ) : (
+            likers.map((p) => (
+              <div key={p.id} className="flex items-center gap-3 rounded-xl px-2.5 py-2 hover:bg-[var(--color-surface-2)]">
+                <Avatar name={p.name} color={p.color} photo={p.avatar} size={38} />
+                <span className="truncate text-sm font-semibold text-[var(--color-ink)]">
+                  {p.isMe ? "You" : p.name}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

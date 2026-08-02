@@ -2,7 +2,7 @@ import "server-only";
 import { and, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { posts, postReactions, profiles, stories, users } from "@/db/schema";
-import type { FeedComment, FeedPost } from "./feed-types";
+import type { FeedComment, FeedPost, PostLiker } from "./feed-types";
 
 /* ============================================================
    Postgres-backed feed — posts persist forever, stories for 24
@@ -251,6 +251,27 @@ export async function toggleLike(
   const post = await getPostDTO(meId, postId);
   if (!post) return null;
   return { liked, authorId: post.authorId, post };
+}
+
+/** Who liked this post, most-recent first — shown to the author AND to any
+ *  other viewer (tapping the "N people support this" line), same as every
+ *  major social feed. */
+export async function getPostLikers(meId: string, postId: string, limit = 100): Promise<PostLiker[]> {
+  const rows = await db
+    .select({ userId: postReactions.userId, name: profiles.fullName, email: users.email, avatar: profiles.avatarUrl })
+    .from(postReactions)
+    .innerJoin(users, eq(users.id, postReactions.userId))
+    .leftJoin(profiles, eq(profiles.userId, postReactions.userId))
+    .where(and(eq(postReactions.postId, postId), eq(postReactions.type, "like")))
+    .orderBy(desc(postReactions.createdAt))
+    .limit(limit);
+  return rows.map((r) => ({
+    id: r.userId,
+    name: authorName(r),
+    avatar: r.avatar ?? undefined,
+    color: colorFor(r.userId),
+    isMe: r.userId === meId,
+  }));
 }
 
 export async function toggleRepost(meId: string, postId: string): Promise<{ reposted: boolean; post: FeedPost } | null> {

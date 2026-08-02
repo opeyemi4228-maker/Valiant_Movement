@@ -29,6 +29,7 @@ import {
   chapterFunds,
   type Transaction,
 } from "@/data/finance";
+import { TreasuryPanel } from "./TreasuryPanel";
 
 const TABS = ["Overview", "Income", "Expenses", "Budgets", "Payouts", "Statements"] as const;
 type Tab = (typeof TABS)[number];
@@ -61,6 +62,10 @@ export function FinanceModule({
           </button>
         ))}
       </div>
+
+      {/* Real treasury — the coordinator's own structure account (balance from
+          the live 50/20/20/10 dues split + its dedicated account + statement). */}
+      {activeTab === "Overview" && <TreasuryPanel />}
 
       {/* KPI cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
