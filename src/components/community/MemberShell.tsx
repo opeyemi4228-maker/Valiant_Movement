@@ -358,41 +358,33 @@ function SidebarInner({
   const labelCls = expanded ? "inline" : "hidden xl:inline";
   return (
     <>
-      {/* Brand */}
-      <div className={`mb-4 flex items-center gap-2.5 px-1 ${expanded ? "" : "justify-center xl:justify-start"}`}>
-        <span className="inline-flex bg-white p-1 ring-1 ring-black/5">
-          <img src="/valiant-logo.png" alt="Valiant Movement" className="h-8 w-auto" />
-        </span>
-        <div className={`leading-tight ${labelCls}`}>
-          <div className="text-[14px] font-extrabold tracking-tight text-[var(--color-navy)]">
-            Valiant
-          </div>
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-brand-strong)]">
-            Movement
-          </div>
-        </div>
+      {/* Brand — the logo badge shown at its true ratio (it already carries
+          the wordmark, so no duplicate text), clean rounding, no white box. */}
+      <div className={`mb-3.5 flex ${expanded ? "px-0.5" : "justify-center xl:justify-start xl:px-0.5"}`}>
+        <img
+          src="/valiant-logo.png"
+          alt="Valiant Movement"
+          className="h-10 w-auto rounded-lg shadow-sm ring-1 ring-black/5"
+        />
       </div>
 
       {/* Member identity card — a civic membership card at the TOP, not an
           @handle chip at the bottom the way X does it. */}
-      <div className={`mb-1 flex items-center gap-2.5 rounded-2xl border border-[var(--color-line)] bg-[var(--color-brand-tint)] p-2.5 ${expanded ? "" : "justify-center xl:justify-start"}`}>
-        <Avatar name={me.name} color="#e07400" photo={me.avatar} size={40} />
-        <div className={`min-w-0 flex-1 leading-tight ${labelCls}`}>
-          <div className="flex items-center gap-1">
-            <span className="truncate text-[13.5px] font-bold text-[var(--color-ink)]">{me.name}</span>
-            <BadgeCheck className="h-3.5 w-3.5 shrink-0 text-[var(--color-brand)]" />
-          </div>
-          <span className="text-[11px] font-semibold text-[var(--color-green)]">Verified member</span>
+      <div className={`mb-1 flex items-center gap-3 rounded-2xl border border-[var(--color-line)] bg-white p-2.5 shadow-sm ${expanded ? "" : "justify-center xl:justify-start"}`}>
+        <div className="relative shrink-0">
+          <span className="block rounded-full ring-2 ring-[var(--color-brand)]/25">
+            <Avatar name={me.name} color="#e07400" photo={me.avatar} size={42} />
+          </span>
+          <span className="absolute -bottom-0.5 -right-0.5 grid size-[18px] place-items-center rounded-full bg-white ring-1 ring-[var(--color-line)]">
+            <BadgeCheck className="size-3.5 text-[var(--color-brand)]" />
+          </span>
         </div>
-        <form action={logout} className={labelCls}>
-          <button
-            className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--color-muted)] transition hover:bg-white hover:text-[var(--color-danger)]"
-            aria-label="Sign out"
-            title="Sign out"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
-        </form>
+        <div className={`min-w-0 flex-1 leading-tight ${labelCls}`}>
+          <div className="truncate text-[14px] font-bold text-[var(--color-ink)]">{me.name}</div>
+          <div className="mt-0.5 flex items-center gap-1 text-[11px] font-semibold text-[var(--color-green)]">
+            <span className="size-1.5 rounded-full bg-[var(--color-green)]" /> Verified member
+          </div>
+        </div>
       </div>
 
       {/* Grouped console nav — section labels + left-accent active state, so it
@@ -441,8 +433,8 @@ function SidebarInner({
           </div>
         ))}
 
-        {/* Compose — sits at the foot of the console */}
-        <div className="mt-auto pt-4">
+        {/* Footer — compose, then sign out beneath it */}
+        <div className="mt-auto space-y-2 pt-4">
           <button
             onClick={() => go("home")}
             className="flex w-full items-center justify-center gap-2 rounded-xl gradient-brand px-4 py-3 text-[14.5px] font-bold text-white shadow-sm transition hover:opacity-95"
@@ -450,6 +442,16 @@ function SidebarInner({
             <Feather className="h-[18px] w-[18px]" />
             <span className={labelCls}>Post an update</span>
           </button>
+          <form action={logout}>
+            <button
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--color-line)] px-4 py-2.5 text-[13.5px] font-semibold text-[var(--color-muted)] transition hover:border-[var(--color-danger)]/40 hover:bg-[var(--color-danger)]/5 hover:text-[var(--color-danger)]"
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+              <span className={labelCls}>Sign out</span>
+            </button>
+          </form>
         </div>
       </nav>
     </>
