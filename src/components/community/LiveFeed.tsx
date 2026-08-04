@@ -293,24 +293,26 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
       <div className="flex w-full gap-6 px-3 py-4 sm:px-5 lg:px-6 xl:gap-8 xl:px-8">
         {/* ============================ Center feed ============================ */}
         <div className="mx-auto w-full min-w-0 max-w-[680px] flex-1 xl:mx-0 xl:max-w-none">
-          {/* Editorial masthead — kicker · serif headline · rule (civic, not a
-              chat timeline). Personal + institutional in one glance. */}
-          <div className="mb-4">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-[var(--color-brand-strong)]">
+          {/* Bold brand masthead — a confident, full-bleed movement block
+              (Labour-style), the clearest break from the grey social look. */}
+          <div className="relative mb-4 overflow-hidden rounded-3xl gradient-brand px-5 py-5 text-white shadow-md sm:px-6 sm:py-6">
+            {/* soft depth glow */}
+            <div className="pointer-events-none absolute -right-10 -top-14 h-40 w-40 rounded-full bg-white/15 blur-2xl" />
+            <div className="relative flex items-center justify-between">
+              <span className="text-[11px] font-extrabold uppercase tracking-[0.22em] text-white/85">
                 The Movement
               </span>
-              <span className="flex items-center gap-1.5 rounded-full border border-[var(--color-green)]/30 bg-[var(--color-green)]/10 px-2.5 py-1 text-[11px] font-bold text-[var(--color-green)]">
-                <Radio className="h-3 w-3" /> Live
+              <span className="flex items-center gap-1.5 rounded-full bg-white/20 px-2.5 py-1 text-[11px] font-bold text-white backdrop-blur">
+                <span className="size-1.5 animate-pulse rounded-full bg-white" /> Live
               </span>
             </div>
-            <h1 className="mt-2 text-[24px] font-extrabold tracking-tight leading-[1.05] text-[var(--color-navy)]">
-              Good to see you, <span className="text-[var(--color-brand-strong)]">{firstName}</span>.
+            <h1 className="relative mt-3 text-[26px] font-extrabold leading-[1.04] tracking-tight sm:text-[30px]">
+              Good to see you,<br />
+              {firstName}.
             </h1>
-            <p className="mt-1.5 text-[13.5px] text-[var(--color-muted)]">
-              What the movement is doing right now, across the federation.
+            <p className="relative mt-2 max-w-md text-[13.5px] font-medium leading-relaxed text-white/85">
+              What the movement is doing right now — across your ward and the federation.
             </p>
-            <div className="mt-3.5 h-px bg-[var(--color-line)]" />
           </div>
 
           {/* Stories */}
@@ -354,7 +356,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
                           setDraft(q.template);
                           requestAnimationFrame(() => composerRef.current?.focus());
                         }}
-                        className="shrink-0 rounded-full bg-[var(--color-surface-2)] px-3 py-1 text-[12px] font-medium text-[var(--color-ink-soft)] transition hover:bg-[var(--color-brand-tint)] hover:text-[var(--color-brand-strong)]"
+                        className="shrink-0 rounded-full border border-[var(--color-brand)]/25 bg-[var(--color-brand-tint)] px-3 py-1.5 text-[12px] font-bold text-[var(--color-brand-strong)] transition hover:bg-[var(--color-brand)] hover:text-white"
                       >
                         {q.label}
                       </button>
