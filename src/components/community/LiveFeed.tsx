@@ -293,35 +293,19 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
       <div className="flex w-full gap-6 px-3 py-4 sm:px-5 lg:px-6 xl:gap-8 xl:px-8">
         {/* ============================ Center feed ============================ */}
         <div className="mx-auto w-full min-w-0 max-w-[680px] flex-1 xl:mx-0 xl:max-w-none">
-          {/* Premium brand masthead — layered gradient + dotted texture + a
-              faded emblem watermark, with a LIVE stats row from the real feed. */}
-          <div
-            className="relative mb-4 overflow-hidden rounded-3xl px-5 py-6 text-white shadow-lg sm:px-7 sm:py-7"
-            style={{ backgroundImage: "linear-gradient(125deg, #d86a00 0%, #f7931e 46%, #ff9f3e 100%)" }}
-          >
-            {/* dotted texture */}
-            <div
-              className="pointer-events-none absolute inset-0 opacity-[0.13]"
-              style={{ backgroundImage: "radial-gradient(circle, #fff 1px, transparent 1px)", backgroundSize: "15px 15px" }}
-            />
-            {/* depth glows + a soft ring motif (no solid logo overlapping text) */}
-            <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-white/20 blur-3xl" />
-            <div className="pointer-events-none absolute -bottom-20 left-10 h-48 w-48 rounded-full bg-black/10 blur-3xl" />
-            <div className="pointer-events-none absolute -right-12 -top-10 h-52 w-52 rounded-full border border-white/15" />
-            <div className="pointer-events-none absolute -right-4 top-6 h-32 w-32 rounded-full border border-white/10" />
-
-            <div className="relative flex items-center justify-between">
-              <span className="text-[11px] font-extrabold uppercase tracking-[0.26em] text-white/85">
+          {/* Clean bold masthead — a simple orange block, no busy texture. */}
+          <div className="relative mb-4 overflow-hidden rounded-3xl gradient-brand px-5 py-6 text-white shadow-sm sm:px-7">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-extrabold uppercase tracking-[0.24em] text-white/85">
                 The Movement
               </span>
-              <span className="flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold text-white ring-1 ring-white/25 backdrop-blur">
+              <span className="flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold text-white">
                 <span className="size-1.5 animate-pulse rounded-full bg-white" /> Live
               </span>
             </div>
 
-            <h1 className="relative mt-3.5 text-[29px] font-extrabold leading-[1.01] tracking-tight sm:text-[35px]">
-              Good to see you,<br />
-              {firstName}.
+            <h1 className="mt-3 text-[26px] font-extrabold leading-[1.05] tracking-tight sm:text-[30px]">
+              Good to see you, {firstName}.
             </h1>
             <p className="relative mt-2.5 max-w-md text-[13.5px] font-medium leading-relaxed text-white/85">
               What the movement is doing right now, across your ward and the federation.

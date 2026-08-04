@@ -397,7 +397,7 @@ function SidebarInner({
       <nav className="flex flex-1 flex-col gap-0.5">
         {NAV_GROUPS.map((grp) => (
           <div key={grp.label}>
-            <div className={`px-3 pb-1 pt-3.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--color-faint)] ${labelCls}`}>
+            <div className={`px-3 pb-0.5 pt-2.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--color-faint)] ${labelCls}`}>
               {grp.label}
             </div>
             {grp.ids.map((id) => {
@@ -414,7 +414,7 @@ function SidebarInner({
                   key={it.id}
                   onClick={() => go(it.id)}
                   aria-current={active ? "page" : undefined}
-                  className={`group relative flex w-full items-center gap-3.5 rounded-lg px-3 py-2.5 text-[14.5px] font-semibold transition ${
+                  className={`group relative flex w-full items-center gap-3 rounded-lg px-3 py-2 text-[14px] font-semibold transition ${
                     active
                       ? "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
                       : "text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
@@ -424,7 +424,7 @@ function SidebarInner({
                     <span className={`absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-[var(--color-brand)] ${expanded ? "" : "hidden xl:block"}`} />
                   )}
                   <span className="relative">
-                    <Icon className="h-[21px] w-[21px]" strokeWidth={active ? 2.4 : 1.9} />
+                    <Icon className="h-5 w-5" strokeWidth={active ? 2.4 : 1.9} />
                     {badge ? (
                       <span className="absolute -right-2 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold text-white">
                         {badge > 9 ? "9+" : badge}
