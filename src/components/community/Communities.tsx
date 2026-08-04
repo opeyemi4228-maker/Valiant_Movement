@@ -135,7 +135,10 @@ export function Communities() {
           re-entering. ===================== */}
       <div className={`flex h-full w-full shrink-0 flex-col overflow-y-auto border-r border-[var(--color-line)] bg-white md:w-[340px] ${chat ? "hidden md:flex" : "flex"}`}>
         <div className="border-b border-[var(--color-line)] px-4 py-3.5">
-          <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Communities</h1>
+          <div className="text-[10.5px] font-bold uppercase tracking-[0.2em] text-[var(--color-brand-strong)]">
+            The Movement
+          </div>
+          <h1 className="mt-0.5 text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Communities</h1>
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] font-medium text-[var(--color-ink-soft)]">
             <MapPin className="h-3.5 w-3.5 text-[var(--color-brand-strong)]" />
             {[p?.state && `${p.state} State`, p?.lga && `${p.lga} LGA`, p?.ward, p?.pollingUnit]

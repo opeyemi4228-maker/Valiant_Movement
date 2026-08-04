@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { getNotifications, markNotificationsRead } from "@/app/actions/notifications";
 import type { NotificationDTO, NotifType } from "@/lib/notif-types";
+import { PageHeader } from "./PageHeader";
 
 const META: Record<NotifType, { icon: typeof Heart; color: string }> = {
   like: { icon: Heart, color: "var(--color-danger)" },
@@ -214,36 +215,32 @@ function Header({
   bookmarks?: boolean;
 }) {
   return (
-    <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-[var(--color-line)] bg-white/85 px-5 py-3.5 backdrop-blur">
-      {bookmarks ? (
-        <Bookmark className="h-5 w-5 text-[var(--color-brand-strong)]" />
-      ) : (
-        <Bell className="h-5 w-5 text-[var(--color-brand-strong)]" />
-      )}
-      <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">{title}</h1>
-      {unreadCount > 0 && (
-        <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[var(--color-brand)] px-1.5 text-[11px] font-bold text-white">
-          {unreadCount}
-        </span>
-      )}
-      <div className="ml-auto flex items-center gap-1">
-        {!bookmarks && unreadCount > 0 && (
+    <PageHeader
+      kicker="Your Space"
+      title={title}
+      subtitle={bookmarks ? "Posts you saved to return to" : "What the movement did for you"}
+      icon={bookmarks ? <Bookmark className="h-3 w-3" /> : <Bell className="h-3 w-3" />}
+      count={unreadCount}
+      trailing={
+        <div className="flex items-center gap-1">
+          {!bookmarks && unreadCount > 0 && (
+            <button
+              onClick={onMarkAll}
+              className="flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
+            >
+              <CheckCheck className="h-3.5 w-3.5" />
+              Mark all read
+            </button>
+          )}
           <button
-            onClick={onMarkAll}
-            className="flex items-center gap-1.5 rounded-full border border-[var(--color-line)] bg-white px-3 py-1.5 text-xs font-semibold text-[var(--color-ink-soft)] transition hover:bg-[var(--color-surface-2)]"
+            className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
+            aria-label="Notification settings"
           >
-            <CheckCheck className="h-3.5 w-3.5" />
-            Mark all read
+            <Settings className="h-4 w-4" />
           </button>
-        )}
-        <button
-          className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
-          aria-label="Notification settings"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
+        </div>
+      }
+    />
   );
 }
 

@@ -5,6 +5,7 @@ import { Bookmark, Loader2 } from "lucide-react";
 import { loadBookmarks, likePost, repostPost, commentPost, bookmarkPost } from "@/app/actions/feed";
 import type { FeedPost } from "@/lib/feed-types";
 import { PostCard } from "./LiveFeed";
+import { PageHeader } from "./PageHeader";
 
 /**
  * Bookmarks tab — the member's saved posts. Reuses the feed's PostCard so a
@@ -67,15 +68,13 @@ export function Bookmarks({ me, active = true }: { me: { name: string; avatar?: 
 
   return (
     <div className="h-full overflow-y-auto">
-      <header className="sticky top-0 z-20 flex items-center gap-3 border-b border-[var(--color-line)] bg-white/85 px-5 py-3.5 backdrop-blur">
-        <Bookmark className="h-5 w-5 text-[var(--color-brand-strong)]" />
-        <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Bookmarks</h1>
-        {loaded && posts.length > 0 && (
-          <span className="grid h-5 min-w-5 place-items-center rounded-full bg-[var(--color-brand)] px-1.5 text-[11px] font-bold text-white">
-            {posts.length}
-          </span>
-        )}
-      </header>
+      <PageHeader
+        kicker="Your Space"
+        title="Bookmarks"
+        subtitle="Posts you saved to return to"
+        icon={<Bookmark className="h-3 w-3" />}
+        count={loaded ? posts.length : undefined}
+      />
 
       <div className="mx-auto w-full max-w-[680px] px-4 py-5">
         {!loaded ? (
