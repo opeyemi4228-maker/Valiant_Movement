@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   Wallet,
@@ -29,6 +29,7 @@ import { naira, campaigns } from "@/data/finance";
 import { ensureDuesNotifications, getDuesStatus } from "@/app/actions/finance";
 import {
   getWalletSummary,
+  provisionMyReservedAccount,
   verifyDeposit,
   listWithdrawalBanks,
   resolveWithdrawalAccount,
@@ -77,6 +78,18 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
       /* transient — the next poll recovers */
     }
   }, []);
+
+  // Provision the dedicated account ONCE (this hits Monnify) — never on the
+  // poll, so the gateway round-trip can't slow the wallet down. Pull the
+  // freshly-minted number in on success.
+  const provisionedRef = useRef(false);
+  useEffect(() => {
+    if (!active || provisionedRef.current) return;
+    provisionedRef.current = true;
+    provisionMyReservedAccount()
+      .then((accts) => { if (accts.length) refresh(); })
+      .catch(() => {});
+  }, [active, refresh]);
 
   // Initial load + a background poll (deposits/withdrawals settle async, via
   // webhook, so the balance can change without any action on this screen).

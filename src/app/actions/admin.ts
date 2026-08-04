@@ -139,24 +139,33 @@ export async function getTreasury(): Promise<TreasuryResult> {
   try {
     const node = await coordinatorNode(role.scope);
     if (!node) return { ok: false, error: true };
+    // Read-only (this is polled) — provisioning the dedicated account is a
+    // separate one-shot (provisionTreasuryAccount), never on the poll.
     const treasury = await withRetry(() => readTreasury(node));
-
-    // Best-effort: give the treasury its own dedicated account for funding.
-    let reservedAccounts = treasury.reservedAccounts;
-    if (reservedAccounts.length === 0) {
-      try {
-        const email = `treasury-${treasury.key.replace(/[^a-z0-9]+/gi, "-")}@valiantmovement.com`;
-        reservedAccounts = (await ensureStructureReservedAccount(treasury.id, treasury.key, treasury.name, email)) ?? [];
-      } catch (err) {
-        console.error("treasury reserved provisioning failed (non-fatal):", err);
-      }
-    }
-
     const ledger = await withRetry(() => treasuryLedger(treasury.id));
-    return { ok: true, treasury: { ...treasury, reservedAccounts }, ledger, jurisdiction: role.jurisdiction };
+    return { ok: true, treasury, ledger, jurisdiction: role.jurisdiction };
   } catch (err) {
     console.error("getTreasury failed:", err);
     return { ok: false, error: true };
+  }
+}
+
+/** One-shot: provision the coordinator's treasury dedicated account (calls
+ *  Monnify). Called once when the treasury panel opens — never on the poll. */
+export async function provisionTreasuryAccount(): Promise<boolean> {
+  const role = await requireAdminRole();
+  if (!role) return false;
+  try {
+    const node = await coordinatorNode(role.scope);
+    if (!node) return false;
+    const treasury = await readTreasury(node);
+    if (treasury.reservedAccounts.length > 0) return true;
+    const email = `treasury-${treasury.key.replace(/[^a-z0-9]+/gi, "-")}@valiantmovement.com`;
+    const accts = await ensureStructureReservedAccount(treasury.id, treasury.key, treasury.name, email);
+    return !!accts && accts.length > 0;
+  } catch (err) {
+    console.error("provisionTreasuryAccount failed (non-fatal):", err);
+    return false;
   }
 }
 

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Landmark, Copy, ArrowDownLeft, ArrowUpRight, Loader2, ShieldCheck } from "lucide-react";
-import { getTreasury, type TreasuryResult } from "@/app/actions/admin";
+import { getTreasury, provisionTreasuryAccount, type TreasuryResult } from "@/app/actions/admin";
 import { fmtNaira } from "@/lib/wallet-types";
 
 const LEVEL_LABEL: Record<string, string> = {
@@ -26,6 +26,16 @@ export function TreasuryPanel() {
       alive = false;
       clearInterval(t);
     };
+  }, []);
+
+  // Provision the treasury's dedicated account ONCE (hits Monnify), then refresh.
+  const provisionedRef = useRef(false);
+  useEffect(() => {
+    if (provisionedRef.current) return;
+    provisionedRef.current = true;
+    provisionTreasuryAccount()
+      .then((ok) => { if (ok) getTreasury().then((r) => setData(r)); })
+      .catch(() => {});
   }, []);
 
   if (!data) {

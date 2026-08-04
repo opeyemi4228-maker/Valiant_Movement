@@ -59,16 +59,11 @@ export async function getWalletSummary(): Promise<WalletSummary | null> {
     };
   }
   try {
-    const [balance, payments] = await withRetry(() => Promise.all([wdb.getBalance(u.id), wdb.listRecentPayments(u.id)]));
-    // Best-effort: provision (or read) the member's dedicated account. Never
-    // fails the summary — a Monnify hiccup just leaves it "activating".
-    let reservedAccounts: wdb.ReservedAccountView[] = [];
-    try {
-      reservedAccounts =
-        (await wdb.ensureMemberReservedAccount(u.id, u.fullName ?? "", u.email)) ?? [];
-    } catch (err) {
-      console.error("reserved-account provisioning failed (non-fatal):", err);
-    }
+    // Read-only + cheap: NO gateway calls here (this is polled ~every 1.5s).
+    // Provisioning the dedicated account happens once via provisionMyReservedAccount().
+    const [balance, payments, reservedAccounts] = await withRetry(() =>
+      Promise.all([wdb.getBalance(u.id), wdb.listRecentPayments(u.id), wdb.readMemberReserved(u.id)]),
+    );
     return {
       available: true,
       monnifyConfigured: hasMonnify(),
@@ -81,6 +76,20 @@ export async function getWalletSummary(): Promise<WalletSummary | null> {
   } catch (err) {
     console.error("getWalletSummary failed (returning null so the client keeps its last-known state):", err);
     return null;
+  }
+}
+
+/** One-shot: provision the member's dedicated account (calls Monnify). Called
+ *  once when the wallet opens — NEVER on the poll — so the gateway round-trip
+ *  can't bog down the app. Returns the accounts (or [] if it couldn't yet). */
+export async function provisionMyReservedAccount(): Promise<wdb.ReservedAccountView[]> {
+  const u = await me();
+  if (!u || !hasMonnify()) return [];
+  try {
+    return (await wdb.ensureMemberReservedAccount(u.id, u.fullName ?? "", u.email)) ?? [];
+  } catch (err) {
+    console.error("provisionMyReservedAccount failed (non-fatal):", err);
+    return [];
   }
 }
 

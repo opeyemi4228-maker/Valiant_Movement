@@ -555,6 +555,17 @@ async function provisionReserved(
   }
 }
 
+/** Cheap read of the member's stored dedicated account(s) — no gateway call,
+ *  safe for the polled wallet summary. Provisioning happens elsewhere. */
+export async function readMemberReserved(userId: string): Promise<ReservedAccountView[]> {
+  const [w] = await db
+    .select({ accounts: wallets.reservedAccounts })
+    .from(wallets)
+    .where(eq(wallets.userId, userId))
+    .limit(1);
+  return (w?.accounts as ReservedAccountView[] | null) ?? [];
+}
+
 /** Ensure the member has a dedicated account, returning its bank account(s).
  *  Returns null when it can't be provisioned yet (no Monnify keys) — the UI
  *  shows an "activating" state and this heals on the next call once keys exist. */
