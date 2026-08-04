@@ -44,7 +44,6 @@
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-  --font-display: var(--font-display);
 
   --radius-xl: 1rem;
   --radius-2xl: 1.5rem;
@@ -87,16 +86,6 @@ body {
 @layer utilities {
   .text-balance {
     text-wrap: balance;
-  }
-
-  /* Editorial display type — the wordmark and big headings. Civic-editorial
-     gravitas (Ford Foundation), reserved for display moments so the UI stays
-     fast and quiet everywhere else (Module 5: restraint). */
-  .font-display {
-    font-family: var(--font-display), Georgia, "Times New Roman", serif;
-    letter-spacing: -0.015em;
-    text-wrap: balance;
-    font-optical-sizing: auto;
   }
 
   /* Live entrance for newly arriving feed/chat items */

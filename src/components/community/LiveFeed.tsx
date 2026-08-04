@@ -304,7 +304,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
                 <Radio className="h-3 w-3" /> Live
               </span>
             </div>
-            <h1 className="font-display mt-2 text-[27px] font-semibold leading-[1.03] text-[var(--color-navy)]">
+            <h1 className="mt-2 text-[24px] font-extrabold tracking-tight leading-[1.05] text-[var(--color-navy)]">
               Good to see you, <span className="text-[var(--color-brand-strong)]">{firstName}</span>.
             </h1>
             <p className="mt-1.5 text-[13.5px] text-[var(--color-muted)]">

@@ -200,7 +200,7 @@ export function MemberShell({
               <img src="/valiant-logo.png" alt="" className="h-8 w-auto" />
             </span>
             <span className="min-w-0 text-left leading-none">
-              <span className="font-display block truncate text-[19px] font-semibold text-[var(--color-navy)]">
+              <span className="block truncate text-[17px] font-extrabold tracking-tight text-[var(--color-navy)]">
                 The Valiant{" "}
                 <span className="text-[var(--color-brand-strong)]">Movement</span>
               </span>
@@ -356,7 +356,7 @@ function SidebarInner({
           <img src="/valiant-logo.png" alt="Valiant Movement" className="h-8 w-auto" />
         </span>
         <div className={`leading-tight ${labelCls}`}>
-          <div className="font-display text-[16px] font-semibold text-[var(--color-navy)]">
+          <div className="text-[14px] font-extrabold tracking-tight text-[var(--color-navy)]">
             Valiant
           </div>
           <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-brand-strong)]">
