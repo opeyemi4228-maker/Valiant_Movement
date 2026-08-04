@@ -358,14 +358,19 @@ function SidebarInner({
   const labelCls = expanded ? "inline" : "hidden xl:inline";
   return (
     <>
-      {/* Brand — the logo badge shown at its true ratio (it already carries
-          the wordmark, so no duplicate text), clean rounding, no white box. */}
-      <div className={`mb-3.5 flex ${expanded ? "px-0.5" : "justify-center xl:justify-start xl:px-0.5"}`}>
+      {/* Brand — logo mark (uncropped, true ratio) + a clean two-line wordmark. */}
+      <div className={`mb-3.5 flex items-center gap-2.5 ${expanded ? "" : "justify-center xl:justify-start"}`}>
         <img
           src="/valiant-logo.png"
           alt="Valiant Movement"
-          className="h-10 w-auto rounded-lg shadow-sm ring-1 ring-black/5"
+          className="h-9 w-auto shrink-0 rounded-md object-contain"
         />
+        <div className={`leading-none ${labelCls}`}>
+          <div className="text-[17px] font-extrabold tracking-tight text-[var(--color-navy)]">Valiant</div>
+          <div className="mt-1 text-[9.5px] font-bold uppercase tracking-[0.24em] text-[var(--color-brand-strong)]">
+            Movement
+          </div>
+        </div>
       </div>
 
       {/* Member identity card — a civic membership card at the TOP, not an
