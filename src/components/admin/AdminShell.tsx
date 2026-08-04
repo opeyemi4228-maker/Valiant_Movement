@@ -91,7 +91,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
           </div>
           <div className="flex items-center gap-2.5">
             <div className="leading-tight">
-              <div className="text-[15px] font-bold text-[var(--color-navy)]">Valiant Movement</div>
+              <div className="font-display text-[17px] font-semibold text-[var(--color-navy)]">Valiant Movement</div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--color-brand-strong)]">
                 {role.title}
               </div>
@@ -110,7 +110,7 @@ export function AdminShell({ role }: { role: AdminRole }) {
               {mobileNav ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
             </button>
             <div className="min-w-0">
-              <h1 className="truncate text-lg font-bold tracking-tight text-[var(--color-navy)] sm:text-xl">
+              <h1 className="font-display truncate text-xl font-semibold text-[var(--color-navy)] sm:text-2xl">
                 {meta.title}
               </h1>
               <p className="hidden truncate text-sm text-[var(--color-muted)] sm:block">

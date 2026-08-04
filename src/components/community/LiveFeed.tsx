@@ -293,15 +293,24 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
       <div className="flex w-full gap-6 px-3 py-4 sm:px-5 lg:px-6 xl:gap-8 xl:px-8">
         {/* ============================ Center feed ============================ */}
         <div className="mx-auto w-full min-w-0 max-w-[680px] flex-1 xl:mx-0 xl:max-w-none">
-          {/* Header */}
-          <div className="mb-3 flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">The Movement</h1>
-              <p className="text-[13px] text-[var(--color-muted)]">Live across the federation</p>
+          {/* Editorial masthead — kicker · serif headline · rule (civic, not a
+              chat timeline). Personal + institutional in one glance. */}
+          <div className="mb-4">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-[var(--color-brand-strong)]">
+                The Movement
+              </span>
+              <span className="flex items-center gap-1.5 rounded-full border border-[var(--color-green)]/30 bg-[var(--color-green)]/10 px-2.5 py-1 text-[11px] font-bold text-[var(--color-green)]">
+                <Radio className="h-3 w-3" /> Live
+              </span>
             </div>
-            <span className="flex items-center gap-1.5 rounded-full border border-[var(--color-green)]/30 bg-[var(--color-green)]/10 px-2.5 py-1 text-[11px] font-bold text-[var(--color-green)]">
-              <Radio className="h-3 w-3" /> Live
-            </span>
+            <h1 className="font-display mt-2 text-[27px] font-semibold leading-[1.03] text-[var(--color-navy)]">
+              Good to see you, <span className="text-[var(--color-brand-strong)]">{firstName}</span>.
+            </h1>
+            <p className="mt-1.5 text-[13.5px] text-[var(--color-muted)]">
+              What the movement is doing right now, across the federation.
+            </p>
+            <div className="mt-3.5 h-px bg-[var(--color-line)]" />
           </div>
 
           {/* Stories */}
