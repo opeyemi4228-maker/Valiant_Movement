@@ -15,6 +15,7 @@ import {
   Feather,
   Radio,
   X,
+  BadgeCheck,
 } from "lucide-react";
 import { logout } from "@/app/actions/auth";
 import type { ActiveHuddleAlert } from "@/app/actions/realtime";
@@ -59,6 +60,13 @@ const TITLES: Record<Tab, string> = {
  *  pill never wraps on a phone — Profile is reached via the avatar, Bookmarks
  *  via the drawer. */
 const MOBILE_NAV = NAV.slice(0, 5);
+
+/** Desktop console nav, grouped so it reads as a member portal, not a flat
+ *  social sidebar. */
+const NAV_GROUPS: { label: string; ids: Tab[] }[] = [
+  { label: "The Movement", ids: ["home", "communities", "messages"] },
+  { label: "Your Space", ids: ["finance", "notifications", "bookmarks", "profile"] },
+];
 
 export function MemberShell({
   user,
@@ -365,71 +373,85 @@ function SidebarInner({
         </div>
       </div>
 
-      {/* Nav */}
-      <nav className="flex flex-1 flex-col gap-1">
-        {NAV.map((item) => {
-          const active = tab === item.id;
-          const Icon = item.icon;
-          const badge =
-            item.id === "notifications" ? notifCount
-            : item.id === "messages" ? messagesCount
-            : item.id === "communities" ? communitiesCount
-            : item.badge;
-          return (
-            <button
-              key={item.id}
-              onClick={() => go(item.id)}
-              className={`group relative flex items-center gap-3.5 rounded-xl px-3 py-2.5 text-[15px] font-medium transition ${
-                active
-                  ? "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
-                  : "text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
-              } ${expanded ? "" : "justify-center xl:justify-start"}`}
-            >
-              <span className="relative">
-                <Icon className="h-[22px] w-[22px]" strokeWidth={active ? 2.4 : 1.9} />
-                {badge ? (
-                  <span className="absolute -right-2 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold text-white">
-                    {badge > 9 ? "9+" : badge}
-                  </span>
-                ) : null}
-              </span>
-              <span className={labelCls}>{item.label}</span>
-              {active && (
-                <span className={`ml-auto h-1.5 w-1.5 rounded-full bg-[var(--color-brand)] ${labelCls}`} />
-              )}
-            </button>
-          );
-        })}
-
-        {/* Post CTA */}
-        <button
-          onClick={() => go("home")}
-          className="mt-3 flex items-center justify-center gap-2 rounded-full gradient-brand px-4 py-3 text-[15px] font-bold text-white shadow-sm transition hover:opacity-95"
-        >
-          <Feather className="h-5 w-5" />
-          <span className={labelCls}>Create post</span>
-        </button>
-      </nav>
-
-      {/* User chip + sign out */}
-      <div className="mt-3 border-t border-[var(--color-line)] pt-3">
-        <div className={`flex items-center gap-3 rounded-xl px-2 py-2 ${expanded ? "" : "justify-center xl:justify-start"}`}>
-          <Avatar name={me.name} color="#e07400" photo={me.avatar} size={38} />
-          <div className={`min-w-0 flex-1 leading-tight ${labelCls}`}>
-            <div className="truncate text-sm font-semibold text-[var(--color-ink)]">{me.name}</div>
-            <div className="truncate text-xs text-[var(--color-faint)]">{me.handle}</div>
+      {/* Member identity card — a civic membership card at the TOP, not an
+          @handle chip at the bottom the way X does it. */}
+      <div className={`mb-1 flex items-center gap-2.5 rounded-2xl border border-[var(--color-line)] bg-[var(--color-brand-tint)] p-2.5 ${expanded ? "" : "justify-center xl:justify-start"}`}>
+        <Avatar name={me.name} color="#e07400" photo={me.avatar} size={40} />
+        <div className={`min-w-0 flex-1 leading-tight ${labelCls}`}>
+          <div className="flex items-center gap-1">
+            <span className="truncate text-[13.5px] font-bold text-[var(--color-ink)]">{me.name}</span>
+            <BadgeCheck className="h-3.5 w-3.5 shrink-0 text-[var(--color-brand)]" />
           </div>
-          <form action={logout} className={labelCls}>
-            <button
-              className="grid size-8 place-items-center rounded-lg text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-danger)]"
-              aria-label="Sign out"
-              title="Sign out"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          </form>
+          <span className="text-[11px] font-semibold text-[var(--color-green)]">Verified member</span>
         </div>
+        <form action={logout} className={labelCls}>
+          <button
+            className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--color-muted)] transition hover:bg-white hover:text-[var(--color-danger)]"
+            aria-label="Sign out"
+            title="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </form>
       </div>
+
+      {/* Grouped console nav — section labels + left-accent active state, so it
+          reads as a member portal rather than a flat social sidebar. */}
+      <nav className="flex flex-1 flex-col gap-0.5">
+        {NAV_GROUPS.map((grp) => (
+          <div key={grp.label}>
+            <div className={`px-3 pb-1 pt-3.5 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--color-faint)] ${labelCls}`}>
+              {grp.label}
+            </div>
+            {grp.ids.map((id) => {
+              const it = NAV.find((n) => n.id === id)!;
+              const active = tab === it.id;
+              const Icon = it.icon;
+              const badge =
+                it.id === "notifications" ? notifCount
+                : it.id === "messages" ? messagesCount
+                : it.id === "communities" ? communitiesCount
+                : it.badge;
+              return (
+                <button
+                  key={it.id}
+                  onClick={() => go(it.id)}
+                  aria-current={active ? "page" : undefined}
+                  className={`group relative flex w-full items-center gap-3.5 rounded-lg px-3 py-2.5 text-[14.5px] font-semibold transition ${
+                    active
+                      ? "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
+                      : "text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
+                  } ${expanded ? "" : "justify-center xl:justify-start"}`}
+                >
+                  {active && (
+                    <span className={`absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-[var(--color-brand)] ${expanded ? "" : "hidden xl:block"}`} />
+                  )}
+                  <span className="relative">
+                    <Icon className="h-[21px] w-[21px]" strokeWidth={active ? 2.4 : 1.9} />
+                    {badge ? (
+                      <span className="absolute -right-2 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold text-white">
+                        {badge > 9 ? "9+" : badge}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className={labelCls}>{it.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
+
+        {/* Compose — sits at the foot of the console */}
+        <div className="mt-auto pt-4">
+          <button
+            onClick={() => go("home")}
+            className="flex w-full items-center justify-center gap-2 rounded-xl gradient-brand px-4 py-3 text-[14.5px] font-bold text-white shadow-sm transition hover:opacity-95"
+          >
+            <Feather className="h-[18px] w-[18px]" />
+            <span className={labelCls}>Post an update</span>
+          </button>
+        </div>
+      </nav>
     </>
   );
 }
