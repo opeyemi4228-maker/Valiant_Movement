@@ -19,6 +19,7 @@ import {
   Users,
   Video,
   MapPin,
+  Megaphone,
   CalendarDays,
   ChevronRight,
   Bookmark,
@@ -27,6 +28,8 @@ import {
   Pin,
 } from "lucide-react";
 import { loadFeedBundle, publishPost, likePost, repostPost, commentPost, bookmarkPost, publishStory, getPostLikers } from "@/app/actions/feed";
+import { getFeedActivities } from "@/app/actions/activities";
+import type { ActivityDTO } from "@/lib/activities-db";
 import type { StoryDTO } from "@/lib/feed-db";
 import type { FeedPost, PostLiker } from "@/lib/feed-types";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
@@ -66,6 +69,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
   const [showEmoji, setShowEmoji] = useState(false);
   const [myStory, setMyStory] = useState<{ media: string; caption: string } | null>(null); // demo fallback
   const [dbStories, setDbStories] = useState<StoryDTO[]>([]);
+  const [dispatches, setDispatches] = useState<ActivityDTO[]>([]);
   const [storyImg, setStoryImg] = useState<string | null>(null); // create-story preview
   const [storyCaption, setStoryCaption] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -165,6 +169,17 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
       clearInterval(t);
     };
   }, [refresh, active]);
+
+  // Coordinator dispatches relevant to this member (national + their state /
+  // LGA / ward). Refreshed on a slow poll — they change far less than posts.
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    const pull = () => getFeedActivities().then((d) => alive && setDispatches(d));
+    const kick = setTimeout(pull, 0);
+    const t = setInterval(pull, 30000);
+    return () => { alive = false; clearTimeout(kick); clearInterval(t); };
+  }, [active]);
 
   function upsert(post: FeedPost) {
     setPosts((prev) => prev.map((p) => (p.id === post.id ? post : p)));
@@ -426,6 +441,16 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
                 </button>
               </div>
             )}
+            {!activeTag && dispatches.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-1.5 px-1 text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--color-brand-strong)]">
+                  <Megaphone className="h-3.5 w-3.5" /> From your coordinators
+                </div>
+                {dispatches.map((a) => (
+                  <DispatchCard key={a.id} a={a} />
+                ))}
+              </div>
+            )}
             {!loaded && (
               <>
                 {[0, 1, 2].map((i) => (
@@ -595,6 +620,47 @@ function Stories({
         </button>
       ))}
     </div>
+  );
+}
+
+/* --------------------------- Coordinator dispatch --------------------------- */
+
+const DISPATCH_TINT: Record<string, string> = {
+  national: "var(--color-brand-strong)",
+  state: "var(--color-green)",
+  lga: "#0ea5e9",
+  ward: "#7c3aed",
+};
+
+/** A coordinator field-activity summary as it appears in the general feed. */
+function DispatchCard({ a }: { a: ActivityDTO }) {
+  const tint = DISPATCH_TINT[a.level] ?? "var(--color-brand-strong)";
+  return (
+    <article
+      className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white shadow-sm"
+      style={{ borderLeft: `3px solid ${tint}` }}
+    >
+      <div className="p-4">
+        <div className="flex items-center gap-2.5">
+          <span className="grid size-9 shrink-0 place-items-center rounded-full text-white" style={{ backgroundColor: tint }}>
+            <Megaphone className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="truncate text-sm font-bold text-[var(--color-ink)]">{a.authorTitle}</div>
+            <div className="flex items-center gap-1 truncate text-[11px] text-[var(--color-faint)]">
+              <MapPin className="h-3 w-3 shrink-0" /> {a.jurisdiction} · {timeAgo(a.createdAt)}
+            </div>
+          </div>
+          <span className="shrink-0 rounded-full bg-[var(--color-brand-tint)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-brand-strong)]">
+            Dispatch
+          </span>
+        </div>
+        <p className="mt-2.5 text-sm leading-relaxed text-[var(--color-ink-soft)]">{a.body}</p>
+        {a.image && (
+          <img src={a.image} alt="" className="mt-2.5 max-h-72 w-full rounded-xl border border-[var(--color-line)] object-cover" />
+        )}
+      </div>
+    </article>
   );
 }
 

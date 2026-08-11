@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { getAdminMembers, exportAdminMembersCsv, type AdminMemberRow } from "@/app/actions/admin";
 import type { AdminRole } from "@/data/admin-roles";
+import { ActivityDashboard } from "./ActivityDashboard";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -193,6 +194,10 @@ export function DashboardOverview({
           </button>
         </div>
       </div>
+
+      {/* Field activity — log what you did in your jurisdiction; it posts to
+          the members' general feed and stays in your dashboard. */}
+      <ActivityDashboard />
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

@@ -808,6 +808,39 @@ export const structurePayments = pgTable(
   ],
 );
 
+/* ============================================================
+   Coordinator activities — the field log. A coordinator (Ward /
+   LGA / State / National) records something they did in their
+   jurisdiction with a photo + a few words; it's saved to their
+   dashboard and a summary surfaces in the members' general feed.
+
+   Authored by an AdminRole (coordinators aren't member users), so
+   we stamp the role key/title + jurisdiction geo rather than a
+   userId. `level`+geo drive who sees it in their feed.
+   ============================================================ */
+export const coordinatorActivities = pgTable(
+  "coordinator_activities",
+  {
+    id: pk(),
+    level: structureLevel("level").notNull(), // ward | lga | state | national
+    roleKey: text("role_key").notNull(), // "national" | "state" | "lga" | "ward"
+    authorTitle: text("author_title").notNull(), // e.g. "Ward Captain"
+    jurisdiction: text("jurisdiction").notNull(), // display, e.g. "Ward 04 · Ikeja · Lagos"
+    // Geography the activity belongs to (null upward — national has none).
+    stateId: uuid("state_id").references(() => states.id),
+    lgaId: uuid("lga_id").references(() => lgas.id),
+    ward: text("ward"),
+    body: text("body").notNull(), // the few words about the activity
+    image: text("image"), // optional photo (data URL), like feed post media
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // "the general feed" + scoped lookups, newest first
+    index("coordinator_activities_geo_idx").on(t.level, t.stateId, t.lgaId, t.createdAt.desc()),
+    index("coordinator_activities_recent_idx").on(t.createdAt.desc()),
+  ],
+);
+
 /* ----------------------------- relations ----------------------------- */
 
 export const usersRelations = relations(users, ({ one, many }) => ({
