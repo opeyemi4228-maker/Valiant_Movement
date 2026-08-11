@@ -29,6 +29,7 @@ import { naira } from "@/data/finance";
 import { NIGERIA, getWards, getPollingUnits } from "@/data/nigeria";
 import { getMyProfile, updateMyProfile } from "@/app/actions/profile";
 import { loadFeed } from "@/app/actions/feed";
+import { ReferralCard } from "./ReferralCard";
 import { getMyCommunities } from "@/app/actions/communities";
 import type { CommunityDTO } from "@/lib/communities";
 import type { FeedPost } from "@/lib/feed-types";
@@ -250,6 +251,9 @@ export function Profile({
                 Identity verified against the National Identity Number (NIN).
               </div>
             </div>
+
+            {/* ========================= Referral dashboard ========================= */}
+            <ReferralCard />
 
             {/* ============================ Impact stats ============================ */}
             <div className="grid grid-cols-2 gap-3">
