@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   ShieldQuestion,
   User,
+  Gift,
 } from "lucide-react";
 import { registerMember } from "@/app/actions/auth";
 import { AuthShell } from "@/components/auth/AuthShell";
@@ -36,6 +37,7 @@ interface FormState {
   location: LocationValue;
   password: string;
   confirm: string;
+  referralCode: string;
 }
 
 const STEPS = [
@@ -64,9 +66,23 @@ export default function RegisterPage() {
     location: { state: "", lga: "", ward: "", pollingUnit: "" },
     password: "",
     confirm: "",
+    referralCode: "",
   });
 
   const update = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }));
+
+  // Prefill the referral code from an invite link (/register?ref=VM-XXXXXX) so
+  // the inviter is auto-credited without the new member typing anything.
+  // Deferred (after paint) so it doesn't cascade-render inside the effect.
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get("ref");
+    if (!ref) return;
+    const id = setTimeout(
+      () => setForm((f) => (f.referralCode ? f : { ...f, referralCode: ref.trim().toUpperCase() })),
+      0,
+    );
+    return () => clearTimeout(id);
+  }, []);
 
   const stepValid = useMemo(() => {
     if (step === 0) {
@@ -106,6 +122,7 @@ export default function RegisterPage() {
         ward: form.location.ward,
         pollingUnit: form.location.pollingUnit,
         password: form.password,
+        referralCode: form.referralCode,
       });
       if (result.ok) {
         setSubmitted(true);
@@ -401,6 +418,26 @@ function SecurityStep({
           Passwords don&apos;t match yet.
         </p>
       )}
+
+      {/* Referral code — optional; prefilled from an invite link (?ref=). */}
+      <div>
+        <label className="mb-1.5 block text-sm font-semibold text-[var(--color-ink-soft)]">
+          Referral code <span className="font-normal text-[var(--color-faint)]">· optional</span>
+        </label>
+        <div className="relative">
+          <Gift className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-faint)]" />
+          <input
+            value={form.referralCode}
+            onChange={(e) => update({ referralCode: e.target.value.toUpperCase() })}
+            placeholder="VM-XXXXXX"
+            autoCapitalize="characters"
+            className="field pl-11 pr-4 tracking-wider"
+          />
+        </div>
+        <p className="mt-1.5 text-xs text-[var(--color-muted)]">
+          Were you invited? Enter your inviter&apos;s code so they get the credit.
+        </p>
+      </div>
       <label className="flex cursor-pointer items-start gap-2.5 text-xs leading-relaxed text-[var(--color-muted)]">
         <input
           type="checkbox"
