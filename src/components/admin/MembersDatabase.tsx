@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { getAdminMembers, exportAdminMembersCsv, setCommunityMemberRole, type AdminMemberRow } from "@/app/actions/admin";
 import type { AdminScope } from "@/data/admin-roles";
+import { ReferralLeaderboard } from "./ReferralLeaderboard";
 
 const PAGE_SIZE = 8;
 
@@ -223,6 +224,9 @@ export function MembersDatabase({
           <StatCard label="States covered" value={stats.states} sub="of 37 (36 + FCT)" icon={<BadgeCheck className="h-4 w-4" />} />
         )}
       </div>
+
+      {/* Recruitment scoreboard — who's bringing new members in (scoped) */}
+      <ReferralLeaderboard />
 
       {/* Table card */}
       <div className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white shadow-sm">
