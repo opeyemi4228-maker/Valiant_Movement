@@ -397,9 +397,10 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
                   </div>
                   <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickImage} />
                   <button
+                    type="button"
                     onClick={onPublish}
                     disabled={(!draft.trim() && !image) || posting}
-                    className="rounded-full gradient-brand px-5 py-2 text-sm font-bold text-white shadow-sm transition enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="rounded-full gradient-brand px-5 py-2 text-sm font-bold text-white shadow-sm transition-opacity enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {posting ? "Posting…" : "Post"}
                   </button>

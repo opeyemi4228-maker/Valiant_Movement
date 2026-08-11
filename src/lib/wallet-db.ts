@@ -772,6 +772,35 @@ export async function deletePayoutAccount(userId: string, id: string): Promise<v
   await db.delete(payoutAccounts).where(and(eq(payoutAccounts.id, id), eq(payoutAccounts.userId, userId)));
 }
 
+/** Credit a referral reward-tier bonus to a member's wallet, exactly once per
+ *  tier (gated by the reference), and log it in their ledger. Returns whether
+ *  it was newly granted (false = already had this tier's bonus). */
+export async function creditReferralBonus(
+  userId: string,
+  amount: number,
+  tierKey: string,
+  description: string,
+): Promise<boolean> {
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+  const [ledgered] = await db
+    .insert(payments)
+    .values({
+      userId,
+      kind: "adjustment",
+      status: "completed",
+      provider: "manual",
+      amount,
+      reference: `refbonus_${userId}_${tierKey}`,
+      description,
+      completedAt: new Date(),
+    })
+    .onConflictDoNothing()
+    .returning({ id: payments.id });
+  if (!ledgered) return false;
+  await credit(userId, amount);
+  return true;
+}
+
 /* ============================================================
    Treasury reads — a coordinator's own structure account (balance
    + dedicated number + ledger) for the treasury dashboard (§7.2).

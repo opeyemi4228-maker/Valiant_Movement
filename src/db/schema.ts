@@ -194,12 +194,19 @@ export const profiles = pgTable(
     // loaded into the `wards` / `polling_units` tables, then promoted to FKs.
     ward: text("ward"),
     pollingUnit: text("polling_unit"),
+    // Referrals — every member gets a unique code at sign-up; `referredBy` is
+    // the member whose code brought this one in (null = joined on their own).
+    // Referral counts are derived by aggregating `referred_by`.
+    referralCode: text("referral_code").unique(),
+    referredBy: uuid("referred_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     // geo rollups: "members in my state / LGA"
     index("profiles_state_idx").on(t.stateId),
     index("profiles_lga_idx").on(t.lgaId),
+    // "who did this member bring in", newest first — powers counts + leaderboard
+    index("profiles_referred_by_idx").on(t.referredBy, t.createdAt.desc()),
   ],
 );
 

@@ -80,11 +80,22 @@ export function RealtimePresence() {
         inFlight = false;
       }
     };
-    tick();
-    const t = setInterval(tick, 1200); // re-tightened now the Neon quota crisis is resolved on the new project
+    // Only poll when the tab is actually visible — no server hits (and no
+    // shell-wide re-renders) while the app is backgrounded. This runs
+    // app-wide, so its cadence drives the whole shell's re-render rate;
+    // 2.5s keeps badges/call-ringing feeling live without the constant churn.
+    const run = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      tick();
+    };
+    run();
+    const t = setInterval(run, 2500);
+    const onVisible = () => run();
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 

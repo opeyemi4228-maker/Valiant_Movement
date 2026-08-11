@@ -20,6 +20,8 @@ export const registerSchema = z.object({
   ward: z.string().trim().min(1, "Select your ward"),
   pollingUnit: z.string().trim().min(1, "Select your polling unit"),
   password: z.string().min(8, "Password must be at least 8 characters").max(200),
+  // Optional — the code of the member who invited them (from a ref link/field).
+  referralCode: z.string().trim().max(20).optional().or(z.literal("")),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

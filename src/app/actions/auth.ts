@@ -35,6 +35,7 @@ import {
 } from "@/lib/demo-store";
 import { ensureGeoCommunities } from "@/lib/communities";
 import { ensureMemberReservedAccount } from "@/lib/wallet-db";
+import { ensureReferralCode, resolveReferrer, grantReferralRewards } from "@/lib/referrals-db";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { createSession } from "@/lib/session";
 import { generateToken, hashNin, hashToken } from "@/lib/tokens";
@@ -117,6 +118,16 @@ export async function registerMember(
       ? hashNin(data.nin, env.NIN_HASH_SECRET)
       : null;
 
+  // Credit the inviter, if this member registered with a referral code.
+  let referredBy: string | null = null;
+  if (data.referralCode) {
+    try {
+      referredBy = await resolveReferrer(data.referralCode, userId);
+    } catch (err) {
+      console.warn("[registerMember] referral resolve skipped", err);
+    }
+  }
+
   try {
     await db.batch([
       // Launch phase: members are verified + active on sign-up so they can use
@@ -143,6 +154,7 @@ export async function registerMember(
         lgaId: lgaRow?.id ?? null,
         ward: data.ward,
         pollingUnit: data.pollingUnit,
+        referredBy,
       }),
       db.insert(emailVerifications).values({
         userId,
@@ -183,6 +195,23 @@ export async function registerMember(
     await ensureMemberReservedAccount(userId, data.fullName, email);
   } catch (err) {
     console.warn("[registerMember] reserved account not provisioned at signup", err);
+  }
+
+  // Give the new member their own referral code so they can start inviting
+  // immediately. Best-effort — self-heals when they open their profile.
+  try {
+    await ensureReferralCode(userId);
+  } catch (err) {
+    console.warn("[registerMember] referral code not provisioned at signup", err);
+  }
+
+  // Credit the inviter any reward-tier bonus this new member just earned them.
+  if (referredBy) {
+    try {
+      await grantReferralRewards(referredBy);
+    } catch (err) {
+      console.warn("[registerMember] referral rewards skipped", err);
+    }
   }
 
   // Best-effort verification email — never blocks sign-up if email isn't configured.
