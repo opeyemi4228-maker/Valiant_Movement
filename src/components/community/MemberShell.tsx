@@ -30,6 +30,7 @@ import { Avatar } from "./Avatar";
 import { RealtimePresence } from "./RealtimePresence";
 import { ValiantAILauncher } from "@/components/ai/ValiantAILauncher";
 import { CallCenter } from "@/components/call/CallCenter";
+import type { ThreadDetail } from "./chat-shared";
 
 type Tab = "home" | "communities" | "messages" | "finance" | "notifications" | "bookmarks" | "profile";
 
@@ -56,9 +57,8 @@ const TITLES: Record<Tab, string> = {
   profile: "Profile",
 };
 
-/** Primary tabs in the mobile bottom navigation. Kept to five so the expandable
- *  pill never wraps on a phone — Profile is reached via the avatar, Bookmarks
- *  via the drawer. */
+/** Primary tabs in the mobile bottom navigation. Kept to five so labels never
+ *  crowd on a phone — Bookmarks and Profile live in the top bar instead. */
 const MOBILE_NAV = NAV.slice(0, 5);
 
 /** Desktop console nav, grouped so it reads as a member portal, not a flat
@@ -95,6 +95,8 @@ export function MemberShell({
   const [communitiesUnread, setCommunitiesUnread] = useState(0);
   const [activeHuddles, setActiveHuddles] = useState<ActiveHuddleAlert[]>([]);
   const [dismissedHuddles, setDismissedHuddles] = useState<Set<string>>(new Set());
+  // Tabs that currently have a conversation open (Messages / Communities).
+  const [threadOpen, setThreadOpen] = useState<Partial<Record<Tab, boolean>>>({});
   const name = user.fullName ?? "Member";
 
   // Live nav badges — RealtimePresence broadcasts these unread counts every
@@ -110,7 +112,13 @@ export function MemberShell({
     window.addEventListener("valiant:communities-unread", onCommunitiesCount);
     window.addEventListener("valiant:active-huddles", onHuddles);
     window.addEventListener("valiant:open-notifications", onOpen);
+    const onThread = (e: Event) => {
+      const { tab: t, open } = (e as CustomEvent<ThreadDetail>).detail;
+      setThreadOpen((prev) => (!!prev[t] === open ? prev : { ...prev, [t]: open }));
+    };
+    window.addEventListener("valiant:thread", onThread);
     return () => {
+      window.removeEventListener("valiant:thread", onThread);
       window.removeEventListener("valiant:notif-unread", onCount);
       window.removeEventListener("valiant:messages-unread", onMessagesCount);
       window.removeEventListener("valiant:communities-unread", onCommunitiesCount);
@@ -119,6 +127,30 @@ export function MemberShell({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A conversation is open on the visible tab. Below md the thread fills the
+  // panel, so the app bar + bottom tabs step aside and the chat gets the
+  // whole phone screen — the way every messaging app behaves.
+  const immersive = !!threadOpen[tab];
+
+  // While immersive on a phone, the Back button/gesture closes the thread
+  // instead of leaving the app: push a history entry on open, and close the
+  // thread when it's popped. Closing via the in-app arrow pops our entry so
+  // no dead "Back" press is left behind.
+  useEffect(() => {
+    if (!immersive || !window.matchMedia("(max-width: 767px)").matches) return;
+    window.history.pushState({ vmThread: true }, "", window.location.href);
+    let popped = false;
+    const onPop = () => {
+      popped = true;
+      window.dispatchEvent(new CustomEvent("valiant:close-thread", { detail: tab }));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (!popped && window.history.state?.vmThread) window.history.back();
+    };
+  }, [immersive, tab]);
 
   // Shown app-wide except while already on Communities — that tab has its
   // own in-context "Join" banner + row badges, so this would be redundant
@@ -150,13 +182,17 @@ export function MemberShell({
   const activeMobileIndex = MOBILE_NAV.findIndex((n) => n.id === tab);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[var(--color-bg)]">
+    // h-dvh, not h-screen: on phones 100vh is the height with the browser's
+    // URL bar *collapsed*, so an h-screen shell overflows the visible area and
+    // pushes the bottom tab bar off-screen until the user scrolls. 100dvh
+    // tracks the actually-visible viewport.
+    <div className="flex h-dvh overflow-hidden bg-[var(--color-bg)]">
       {/* App-wide "a huddle is live" banner — visible from any tab except
           Communities (which already has its own in-context join banner).
           Persists until the huddle actually ends; dismissing just hides it
           for this session, it reappears if a NEW huddle starts. */}
       {huddleAlerts.length > 0 && (
-        <div className="fixed inset-x-0 top-0 z-[85] flex justify-center px-3 pt-2">
+        <div className="fixed inset-x-0 top-0 z-[85] flex justify-center px-3 pt-[max(0.5rem,env(safe-area-inset-top))]">
           <div className="flex w-full max-w-md items-center gap-3 rounded-2xl bg-[var(--color-navy)] px-4 py-2.5 text-white shadow-xl">
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--color-green)]/20 text-[var(--color-green)]">
               <Radio className="h-4 w-4 animate-pulse" />
@@ -195,44 +231,61 @@ export function MemberShell({
 
       {/* ================================ Main ================================ */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Mobile top bar — brand on the left, profile on the right. All
-            navigation lives in the bottom tab pill; no drawer needed. */}
-        <header className="sticky top-0 z-30 flex h-[72px] shrink-0 items-center justify-between gap-3 border-b border-[var(--color-line)] bg-white/85 px-4 backdrop-blur lg:hidden">
-          {/* Brand lockup */}
-          <button
-            onClick={() => go("home")}
-            className="flex min-w-0 items-center gap-3 active:scale-[0.98]"
-            aria-label="The Valiant Movement — Home"
-          >
-            <span className="inline-flex shrink-0 items-center justify-center rounded-xl bg-white p-1.5 shadow-sm ring-1 ring-black/5">
-              <img src="/valiant-logo.png" alt="" className="h-8 w-auto" />
-            </span>
-            <span className="min-w-0 text-left leading-none">
-              <span className="block truncate text-[17px] font-extrabold tracking-tight text-[var(--color-navy)]">
-                The Valiant{" "}
-                <span className="text-[var(--color-brand-strong)]">Movement</span>
+        {/* Mobile top bar — brand on the left; Bookmarks + Profile (the two
+            destinations that don't fit the five-tab bottom bar) on the right. */}
+        <header
+          className={`shrink-0 border-b border-[var(--color-line)] bg-white pt-[env(safe-area-inset-top)] lg:hidden ${
+            immersive ? "max-md:hidden" : ""
+          }`}
+        >
+          <div className="flex h-14 items-center justify-between gap-3 px-4">
+            <button
+              onClick={() => go("home")}
+              className="flex min-w-0 items-center gap-2.5 rounded-lg active:opacity-80"
+              aria-label="The Valiant Movement — Home"
+            >
+              <img src="/valiant-logo.png" alt="" className="h-8 w-auto shrink-0 rounded-md" />
+              <span className="truncate text-[16px] font-extrabold tracking-tight text-[var(--color-navy)]">
+                Valiant <span className="text-[var(--color-brand-strong)]">Movement</span>
               </span>
-              <span className="mt-1 block text-[10px] font-bold uppercase tracking-[0.22em] text-[var(--color-faint)]">
-                Courage to Lead
-              </span>
-            </span>
-          </button>
+            </button>
 
-          {/* 44px avatar = the minimum comfortable thumb target */}
-          <button
-            onClick={() => go("profile")}
-            className="shrink-0 rounded-full ring-2 ring-[var(--color-brand-tint)] transition active:scale-95"
-            aria-label="Profile"
-          >
-            <Avatar name={name} color="#e07400" photo={me.avatar} size={44} />
-          </button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                onClick={() => go("bookmarks")}
+                aria-label="Bookmarks"
+                aria-current={tab === "bookmarks" ? "page" : undefined}
+                className={`grid size-10 place-items-center rounded-full transition active:scale-95 ${
+                  tab === "bookmarks"
+                    ? "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
+                    : "text-[var(--color-ink-soft)] hover:bg-[var(--color-surface-2)]"
+                }`}
+              >
+                <Bookmark size={20} strokeWidth={tab === "bookmarks" ? 2.4 : 2} />
+              </button>
+              <button
+                onClick={() => go("profile")}
+                aria-label="Profile"
+                aria-current={tab === "profile" ? "page" : undefined}
+                className={`rounded-full ring-2 ring-offset-2 transition active:scale-95 ${
+                  tab === "profile" ? "ring-[var(--color-brand)]" : "ring-transparent"
+                }`}
+              >
+                <Avatar name={name} color="#e07400" photo={me.avatar} size={36} />
+              </button>
+            </div>
+          </div>
         </header>
 
         {/* Content — once a tab has been visited it stays mounted (hidden via
             CSS instead of unmounted) so switching back to it is instant: no
             re-fetch, no skeleton flash. Each panel's own poll pauses while
             hidden and fires immediately the moment it's shown again. */}
-        <main className="min-h-0 flex-1 overflow-hidden">
+        <main
+          className={`min-h-0 flex-1 overflow-hidden ${
+            immersive ? "max-md:bg-white max-md:pb-[env(safe-area-inset-bottom)] max-md:pt-[env(safe-area-inset-top)]" : ""
+          }`}
+        >
           {visited.has("home") && (
             <div className={tab === "home" ? "h-full" : "hidden"}>
               <LiveFeed me={me} active={tab === "home"} />
@@ -270,10 +323,15 @@ export function MemberShell({
           )}
         </main>
 
-        {/* Mobile bottom tab bar — expandable pill that reveals the active
-            label. Sits in flow so content above it is never covered, with
-            safe-area padding for iOS home-indicator devices. */}
-        <nav className="grid shrink-0 grid-cols-5 border-t border-[var(--color-line)] bg-white pb-[max(0.375rem,env(safe-area-inset-bottom))] lg:hidden">
+        {/* Mobile bottom tab bar. Sits in flow (not fixed) so content above it
+            is never covered, with safe-area padding for iOS home-indicator
+            devices. */}
+        <nav
+          aria-label="Primary"
+          className={`grid shrink-0 grid-cols-5 border-t border-[var(--color-line)] bg-white/95 px-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] backdrop-blur lg:hidden ${
+            immersive ? "max-md:hidden" : ""
+          }`}
+        >
           {MOBILE_NAV.map((n, i) => {
             const active = activeMobileIndex === i;
             const badge =
@@ -288,29 +346,28 @@ export function MemberShell({
                 onClick={() => go(n.id)}
                 aria-label={n.label}
                 aria-current={active ? "page" : undefined}
-                className="relative flex min-w-0 flex-col items-center gap-1 pb-1.5 pt-2.5 transition-colors"
+                className="flex min-h-[56px] min-w-0 flex-col items-center justify-center gap-1 pb-1 pt-1.5 active:opacity-70"
               >
-                {/* active top indicator */}
+                {/* Active pill behind the icon */}
                 <span
-                  className={`absolute inset-x-0 top-0 mx-auto h-0.5 w-8 rounded-full transition-colors ${
-                    active ? "bg-[var(--color-brand)]" : "bg-transparent"
+                  className={`relative grid h-7 w-14 place-items-center rounded-full transition-colors duration-200 ${
+                    active ? "bg-[var(--color-brand-tint)]" : ""
                   }`}
-                />
-                <span className="relative">
+                >
                   <Icon
                     size={22}
                     strokeWidth={active ? 2.4 : 2}
                     className={active ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"}
                   />
                   {badge > 0 && (
-                    <span className="absolute -right-2 -top-1.5 grid h-[16px] min-w-[16px] place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold leading-none text-white ring-2 ring-white">
+                    <span className="absolute right-2 -top-1 grid h-[16px] min-w-[16px] place-items-center rounded-full bg-[var(--color-brand-strong)] px-1 text-[9px] font-bold leading-none text-white ring-2 ring-white">
                       {badge > 9 ? "9+" : badge}
                     </span>
                   )}
                 </span>
                 <span
-                  className={`max-w-full truncate text-[10px] font-semibold leading-none ${
-                    active ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"
+                  className={`max-w-full truncate text-[10.5px] leading-none ${
+                    active ? "font-bold text-[var(--color-brand-strong)]" : "font-semibold text-[var(--color-muted)]"
                   }`}
                 >
                   {n.label}
@@ -327,7 +384,7 @@ export function MemberShell({
       {/* Valiant AI — voice + text assistant, available app-wide. Raised on
           the chat tabs (Messages + community group chat) so the orb clears
           the message composer (voice note + send). */}
-      <ValiantAILauncher raised={tab === "messages" || tab === "communities"} />
+      <ValiantAILauncher raised={tab === "messages" || tab === "communities"} hideOnPhone={immersive} />
 
       {/* App-wide calling: rings, waits for pickup, and dings on new messages. */}
       <CallCenter />

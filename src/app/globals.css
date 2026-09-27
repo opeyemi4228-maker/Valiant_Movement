@@ -64,6 +64,38 @@ body {
   font-family: var(--font-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* No rubber-band bounce of the whole app shell (panels scroll themselves) */
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* iOS Safari zooms the page on focus of any field under 16px — keep text
+   inputs at 16px on touch devices so tapping a field never zooms the app. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
+/* Visible keyboard focus everywhere, without a ring on mouse/touch clicks */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+.field:focus-visible {
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Slim scrollbar */
@@ -115,6 +147,12 @@ body {
   }
   .animate-pop {
     animation: vm-pop 0.3s ease both;
+  }
+
+  /* Bottom breathing room on a panel's scroll container so its last item can
+     scroll clear of the floating Valiant AI button. */
+  .pb-fab {
+    padding-bottom: 6rem;
   }
 
   /* Hide scrollbar for horizontal rails */

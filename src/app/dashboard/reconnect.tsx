@@ -20,7 +20,7 @@ export function Reconnecting({ next }: { next: string }) {
   }, [next]);
 
   return (
-    <div className="grid min-h-screen place-items-center bg-[var(--color-bg)] px-6 text-center">
+    <div className="grid min-h-dvh place-items-center bg-[var(--color-bg)] px-6 text-center">
       <div className="max-w-sm">
         <span className="mx-auto mb-4 inline-flex size-14 items-center justify-center rounded-2xl bg-white p-2 shadow-sm ring-1 ring-black/5">
           <img src="/valiant-logo.png" alt="Valiant Movement" className="h-full w-auto object-contain" />
@@ -40,7 +40,7 @@ export function Reconnecting({ next }: { next: string }) {
 /** Terminal state after repeated reconnect attempts fail — offers a manual retry. */
 export function ConnectionError() {
   return (
-    <div className="grid min-h-screen place-items-center bg-[var(--color-bg)] px-6 text-center">
+    <div className="grid min-h-dvh place-items-center bg-[var(--color-bg)] px-6 text-center">
       <div className="max-w-sm">
         <span className="mx-auto mb-4 inline-flex size-14 items-center justify-center rounded-2xl bg-[var(--color-danger)]/10 text-[var(--color-danger)]">
           <WifiOff className="h-7 w-7" />

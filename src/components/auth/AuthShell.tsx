@@ -52,10 +52,10 @@ function MobileHero() {
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
-    <div className="min-h-screen w-full bg-[var(--color-bg)]">
+    <div className="min-h-dvh w-full bg-[var(--color-bg)]">
       <MobileHero />
 
-      <div className="mx-auto grid max-w-[1500px] grid-cols-1 gap-6 p-4 sm:p-6 lg:grid-cols-2 lg:p-6 lg:min-h-screen">
+      <div className="mx-auto grid max-w-[1500px] grid-cols-1 gap-6 p-4 sm:p-6 lg:grid-cols-2 lg:p-6 lg:min-h-dvh">
         {/* Form side */}
         <div className="flex items-center justify-center px-1 py-6 sm:px-6 lg:px-10">
           <div className="w-full max-w-md">{children}</div>
@@ -63,7 +63,7 @@ export function AuthShell({ children }: { children: ReactNode }) {
 
         {/* Showcase side (desktop) */}
         <div className="hidden lg:block">
-          <div className="sticky top-6 h-[calc(100vh-3rem)]">
+          <div className="sticky top-6 h-[calc(100dvh-3rem)]">
             <AuthShowcase />
           </div>
         </div>

@@ -21,7 +21,7 @@ import type { CommunityDTO, CommunityMemberDTO, CommunityScope } from "@/lib/com
 import type { StartCallDetail } from "@/components/call/CallCenter";
 import { Avatar } from "./Avatar";
 import { CommunityChat } from "./CommunityChat";
-import { colorFor } from "./chat-shared";
+import { colorFor, useThreadMode } from "./chat-shared";
 
 function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
@@ -42,6 +42,7 @@ export function Communities() {
   const [open, setOpen] = useState<CommunityDTO | null>(null);
   const [chat, setChat] = useState<CommunityDTO | null>(null);
   const [unreadByCommunity, setUnreadByCommunity] = useState<Record<string, number>>({});
+  useThreadMode("communities", chat !== null, () => setChat(null));
 
   // Per-community unread badge (mirrors the per-conversation badge in
   // Messages) — polled independently of the one-time community list load.
@@ -133,7 +134,7 @@ export function Communities() {
       {/* ===================== Group list — always on the left, same
           pattern as Messages, so switching groups never means leaving and
           re-entering. ===================== */}
-      <div className={`flex h-full w-full shrink-0 flex-col overflow-y-auto border-r border-[var(--color-line)] bg-white md:w-[340px] ${chat ? "hidden md:flex" : "flex"}`}>
+      <div className={`flex h-full w-full shrink-0 flex-col overflow-y-auto pb-fab border-r border-[var(--color-line)] bg-white md:w-[340px] ${chat ? "hidden md:flex" : "flex"}`}>
         <div className="border-b border-[var(--color-line)] px-4 py-3.5">
           <div className="text-[10.5px] font-bold uppercase tracking-[0.2em] text-[var(--color-brand-strong)]">
             The Movement

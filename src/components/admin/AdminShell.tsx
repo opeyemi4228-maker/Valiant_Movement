@@ -79,9 +79,9 @@ export function AdminShell({ role }: { role: AdminRole }) {
   }
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-[var(--color-bg)]">
+    <div className="flex h-dvh flex-col overflow-hidden bg-[var(--color-bg)]">
       {/* ============================ Top bar ============================ */}
-      <header className="flex h-16 shrink-0 items-stretch border-b border-[var(--color-line)] bg-white">
+      <header className="box-content flex h-16 shrink-0 items-stretch border-b border-[var(--color-line)] bg-white pt-[env(safe-area-inset-top)]">
         {/* Brand zone — aligns over the sidebar (rail 64 + panel 288 = 352) */}
         <div className="hidden w-[352px] shrink-0 items-center border-r border-[var(--color-line)] lg:flex">
           <div className="grid w-16 place-items-center">
@@ -127,12 +127,11 @@ export function AdminShell({ role }: { role: AdminRole }) {
                 className="h-9 w-64 rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-2)] pl-9 pr-3 text-sm outline-none transition focus:border-[var(--color-brand)] focus:bg-white focus:ring-4 focus:ring-[var(--color-brand)]/12"
               />
             </div>
-            <button className="grid size-9 place-items-center rounded-lg border border-[var(--color-line)] text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)] xl:hidden">
-              <Search className="h-4 w-4" />
-            </button>
-            <button className="relative grid size-9 place-items-center rounded-lg border border-[var(--color-line)] text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]">
+            <button
+              aria-label="Notifications"
+              className="relative grid size-9 place-items-center rounded-lg border border-[var(--color-line)] text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
+            >
               <Bell className="h-4 w-4" />
-              <span className="absolute right-2 top-2 size-1.5 rounded-full bg-[var(--color-brand)]" />
             </button>
             <div className="ml-1 hidden items-center gap-2 rounded-xl border border-[var(--color-line)] py-1.5 pl-1.5 pr-3 sm:flex">
               <span className="grid size-7 place-items-center rounded-lg bg-[var(--color-navy)] text-xs font-bold text-white">
@@ -169,9 +168,9 @@ export function AdminShell({ role }: { role: AdminRole }) {
           />
         </div>
 
-        {/* Sidebar — mobile drawer */}
+        {/* Sidebar — mobile drawer (z above the floating Valiant AI orb, z-65) */}
         {mobileNav && (
-          <div className="fixed inset-0 z-40 lg:hidden">
+          <div className="fixed inset-0 z-[66] lg:hidden">
             <div className="absolute inset-0 bg-black/50" onClick={() => setMobileNav(false)} />
             <div className="absolute left-0 top-0 h-full">
               <AdminSidebar

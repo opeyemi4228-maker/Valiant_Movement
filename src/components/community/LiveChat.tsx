@@ -37,7 +37,7 @@ import { reportMember, type ReportCategory } from "@/app/actions/reports";
 import type { CallEligibility } from "@/lib/demo-store";
 import type { StartCallDetail } from "@/components/call/CallCenter";
 import { Avatar } from "./Avatar";
-import { AudioNote, CallEventRow, Composer, FileCard, ImageMedia, clock, colorFor, fmtTime } from "./chat-shared";
+import { AudioNote, CallEventRow, Composer, FileCard, ImageMedia, clock, colorFor, fmtTime, useThreadMode } from "./chat-shared";
 
 function dayLabel(iso: string | null) {
   if (!iso) return "";
@@ -118,6 +118,7 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
 
   const active = convos.find((c) => c.id === activeId) ?? null;
   const isGroup = active?.type === "group";
+  useThreadMode("messages", showThread, () => setShowThread(false));
 
   /* --- initial load --- */
   useEffect(() => {
@@ -416,7 +417,7 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="pb-fab min-h-0 flex-1 overflow-y-auto">
             {/* Valiant AI pinned */}
             <button
               onClick={() => window.dispatchEvent(new Event("valiant-ai:open"))}

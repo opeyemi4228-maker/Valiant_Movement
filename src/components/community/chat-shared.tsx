@@ -456,3 +456,35 @@ export function Composer({
     </div>
   );
 }
+
+/* ------------------------- Full-screen thread mode ------------------------- */
+
+export type ThreadDetail = { tab: "messages" | "communities"; open: boolean };
+
+/**
+ * Tells the member shell whether this tab has a conversation open, so on a
+ * phone it can drop the app bar + bottom tabs and give the thread the whole
+ * screen. The shell answers the hardware/browser Back button with
+ * `valiant:close-thread`, which closes the thread instead of leaving the app.
+ */
+export function useThreadMode(tab: ThreadDetail["tab"], open: boolean, close: () => void) {
+  const closeRef = useRef(close);
+  useEffect(() => {
+    closeRef.current = close;
+  });
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent<ThreadDetail>("valiant:thread", { detail: { tab, open } }));
+  }, [tab, open]);
+
+  useEffect(() => {
+    const onClose = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === tab) closeRef.current();
+    };
+    window.addEventListener("valiant:close-thread", onClose);
+    return () => {
+      window.removeEventListener("valiant:close-thread", onClose);
+      window.dispatchEvent(new CustomEvent<ThreadDetail>("valiant:thread", { detail: { tab, open: false } }));
+    };
+  }, [tab]);
+}

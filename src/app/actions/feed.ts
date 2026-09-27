@@ -89,7 +89,8 @@ async function announcePost(authorId: string, authorName: string): Promise<void>
 export async function publishPost(text: string, image?: string): Promise<{ ok: boolean; error?: string }> {
   const u = await me();
   if (!u) return { ok: false, error: "Sign in to post." };
-  if (!text.trim() && !image) return { ok: false, error: "empty" };
+  text = text.trim();
+  if (!text && !image) return { ok: false, error: "empty" };
   if (image && image.length > 1_500_000) return { ok: false, error: "That image is too large." };
   if (usesDb(u.id)) await fdb.addPost(u.id, text, image);
   else mem.addPost(u.id, text, image);

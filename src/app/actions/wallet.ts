@@ -79,6 +79,20 @@ export async function getWalletSummary(): Promise<WalletSummary | null> {
   }
 }
 
+/** Total dues the member has paid — the profile's "Given" / "Contributed"
+ *  stat. `null` when unavailable (no DB account, or a transient failure) so
+ *  the UI shows a dash instead of a made-up figure. */
+export async function getMyContributions(): Promise<number | null> {
+  const u = await me();
+  if (!u) return null;
+  try {
+    return await withRetry(() => wdb.getTotalDuesPaid(u.id));
+  } catch (err) {
+    console.error("getMyContributions failed:", err);
+    return null;
+  }
+}
+
 /** One-shot: provision the member's dedicated account (calls Monnify). Called
  *  once when the wallet opens — NEVER on the poll — so the gateway round-trip
  *  can't bog down the app. Returns the accounts (or [] if it couldn't yet). */

@@ -263,7 +263,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
   const focusPost = focusId ? posts.find((p) => p.id === focusId) ?? null : null;
 
   return (
-    <div className="no-scrollbar h-full overflow-y-auto">
+    <div className="no-scrollbar pb-fab h-full overflow-y-auto">
       {/* Focused single-post view — just this post and its conversation */}
       {focusPost && (
         <div className="fixed inset-0 z-[55] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:p-6">
@@ -844,7 +844,7 @@ export function PostCard({
         </div>
 
         {post.text && (
-          <p className="mt-2.5 whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-ink-soft)]">{post.text}</p>
+          <p className="mt-2.5 whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-ink-soft)]">{post.text.trim()}</p>
         )}
       </div>
 

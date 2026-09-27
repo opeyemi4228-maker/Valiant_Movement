@@ -47,6 +47,15 @@ export async function getBalance(userId: string): Promise<number> {
   return row?.balance ?? 0;
 }
 
+/** Total naira the member has actually paid in dues (completed only). */
+export async function getTotalDuesPaid(userId: string): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<number>`coalesce(sum(${payments.amount}), 0)::int` })
+    .from(payments)
+    .where(and(eq(payments.userId, userId), eq(payments.kind, "dues"), eq(payments.status, "completed")));
+  return row?.total ?? 0;
+}
+
 /** Unconditional credit — deposits on confirmation, refunds on a failed withdrawal. */
 async function credit(userId: string, amount: number): Promise<void> {
   await db.insert(wallets).values({ userId, balance: amount }).onConflictDoUpdate({

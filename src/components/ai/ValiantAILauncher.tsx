@@ -14,7 +14,10 @@ const WAKE = new RegExp(
 );
 const WAKE_PREF_KEY = "valiant-ai:wake";
 
-export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {}) {
+export function ValiantAILauncher({
+  raised = false,
+  hideOnPhone = false,
+}: { raised?: boolean; hideOnPhone?: boolean } = {}) {
   const [open, setOpen] = useState(false);
   const [wakeOn, setWakeOn] = useState(false);
   const [wakeGreeting, setWakeGreeting] = useState(false);
@@ -196,10 +199,10 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
           (e.g. the chat) so the orb never sits on the voice-note / send button. */}
       {!open && (
         <div
-          className={`fixed z-[65] flex flex-col items-end gap-2 ${
+          className={`fixed z-[65] flex flex-col items-end gap-2 ${hideOnPhone ? "max-md:hidden" : ""} ${
             raised
-              ? "bottom-36 right-4 sm:bottom-24 sm:right-6"
-              : "bottom-20 right-4 sm:bottom-6 sm:right-6"
+              ? "bottom-[calc(8.5rem+env(safe-area-inset-bottom))] right-3 sm:bottom-24 sm:right-6"
+              : "bottom-[calc(4.75rem+env(safe-area-inset-bottom))] right-3 sm:bottom-6 sm:right-6"
           }`}
         >
           {/* heard flash */}
@@ -225,7 +228,8 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
                   ? "Stop listening for “Hey Valiant AI”"
                   : "Listen for “Hey Valiant AI”"
               }
-              className={`flex max-w-[220px] items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-md transition ${
+              aria-label={voiceErr ? "Voice off — tap to retry" : wakeOn && needsMic ? "Allow microphone" : wakeOn ? "Listening for wake word" : "Enable wake word"}
+              className={`flex max-w-[220px] items-center gap-1.5 rounded-full p-2 text-xs font-semibold shadow-md transition sm:px-3 sm:py-1.5 ${
                 voiceErr
                   ? "bg-[var(--color-danger)] text-white"
                   : wakeOn && needsMic
@@ -236,7 +240,8 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
               }`}
             >
               {voiceErr || !wakeOn ? <EarOff className="h-3.5 w-3.5 shrink-0" /> : <Ear className="h-3.5 w-3.5 shrink-0" />}
-              <span className="truncate">
+              {/* Icon-only on phones so the chip never sits over content */}
+              <span className="hidden truncate sm:inline">
                 {voiceErr ? "Voice off" : wakeOn && needsMic ? "Allow mic" : wakeOn ? "Listening" : "Wake word"}
               </span>
             </button>
@@ -246,10 +251,11 @@ export function ValiantAILauncher({ raised = false }: { raised?: boolean } = {})
           <button
             onClick={() => { setWakeGreeting(false); setOpen(true); }}
             aria-label="Open Valiant AI"
-            className="relative grid size-14 place-items-center rounded-full gradient-brand text-white shadow-xl ring-4 ring-[var(--color-brand)]/20 transition hover:scale-105 active:scale-95"
+            className="relative grid size-12 place-items-center rounded-full gradient-brand text-white shadow-lg shadow-[var(--color-brand)]/30 ring-4 ring-white transition hover:scale-105 active:scale-95 sm:size-14"
           >
-            <Sparkles className="h-6 w-6" />
-            {wakeOn && <span className="absolute inset-0 animate-ping rounded-full bg-[var(--color-brand)]/40" />}
+            <Sparkles className="h-5 w-5 sm:h-6 sm:w-6" />
+            {/* Pulse only while genuinely listening — not while waiting on mic permission */}
+            {wakeOn && !needsMic && !voiceErr && <span className="absolute inset-0 animate-ping rounded-full bg-[var(--color-brand)]/40" />}
           </button>
         </div>
       )}

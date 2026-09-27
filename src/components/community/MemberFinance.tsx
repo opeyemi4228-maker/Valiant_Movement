@@ -172,7 +172,7 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
   const loaded = summary !== null;
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="pb-fab h-full overflow-y-auto">
       {toast && (
         <div className="fixed inset-x-0 top-4 z-[75] flex justify-center px-4">
           <div className="max-w-md rounded-2xl bg-[var(--color-navy)] px-4 py-2.5 text-center text-[13px] font-semibold text-white shadow-lg">
@@ -299,17 +299,21 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
 
           {/* ------------------ Campaigns to support ----------------- */}
           <div className="rounded-2xl border border-[var(--color-line)] bg-white p-5 lg:col-span-2">
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="grid size-9 place-items-center rounded-xl bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]">
-                  <HeartHandshake className="h-5 w-5" />
-                </span>
-                <h3 className="font-bold text-[var(--color-navy)]">Causes you can back</h3>
-                <span className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-faint)]">
-                  Preview
-                </span>
+            <div className="mb-4 flex items-center gap-2.5">
+              <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]">
+                <HeartHandshake className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 leading-tight">
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-[var(--color-navy)]">Causes you can back</h3>
+                  <span className="shrink-0 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-faint)]">
+                    Preview
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs font-medium text-[var(--color-faint)]">
+                  {campaigns.filter((c) => c.status === "active").length} active campaigns
+                </p>
               </div>
-              <span className="text-xs font-semibold text-[var(--color-faint)]">{campaigns.filter((c) => c.status === "active").length} active</span>
             </div>
             <div className="space-y-4">
               {campaigns

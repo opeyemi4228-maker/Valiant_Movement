@@ -13,7 +13,6 @@ import {
   Phone,
   BadgeCheck,
   CheckCheck,
-  Settings,
   MessageSquareText,
   Newspaper,
   Wallet,
@@ -128,7 +127,7 @@ export function Notifications({
   /* ----------------------------- Bookmarks ----------------------------- */
   if (bookmarks) {
     return (
-      <div className="h-full overflow-y-auto">
+      <div className="pb-fab h-full overflow-y-auto">
         <Header title={title} bookmarks />
         <div className="grid place-items-center px-6 py-24 text-center">
           <div className="mb-4 grid size-16 place-items-center rounded-2xl bg-[var(--color-brand-tint)]">
@@ -145,7 +144,7 @@ export function Notifications({
 
   /* --------------------------- Notifications --------------------------- */
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="pb-fab h-full overflow-y-auto">
       <Header title={title} unreadCount={unreadCount} onMarkAll={markAll} />
 
       {/* Filter tabs */}
@@ -232,12 +231,6 @@ function Header({
               Mark all read
             </button>
           )}
-          <button
-            className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]"
-            aria-label="Notification settings"
-          >
-            <Settings className="h-4 w-4" />
-          </button>
         </div>
       }
     />

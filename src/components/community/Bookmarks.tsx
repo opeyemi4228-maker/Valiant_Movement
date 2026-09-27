@@ -67,7 +67,7 @@ export function Bookmarks({ me, active = true }: { me: { name: string; avatar?: 
   }
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="pb-fab h-full overflow-y-auto">
       <PageHeader
         kicker="Your Space"
         title="Bookmarks"

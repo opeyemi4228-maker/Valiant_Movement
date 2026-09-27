@@ -31,6 +31,7 @@ import { getMyProfile, updateMyProfile } from "@/app/actions/profile";
 import { loadFeed } from "@/app/actions/feed";
 import { ReferralCard } from "./ReferralCard";
 import { getMyCommunities } from "@/app/actions/communities";
+import { getMyContributions } from "@/app/actions/wallet";
 import type { CommunityDTO } from "@/lib/communities";
 import type { FeedPost } from "@/lib/feed-types";
 import type { ProfileDTO } from "@/lib/demo-store";
@@ -82,12 +83,18 @@ export function Profile({
   const [feedPosts, setFeedPosts] = useState<FeedPost[]>([]);
   const [myCommunities, setMyCommunities] = useState<CommunityDTO[]>([]);
   const [communitiesNote, setCommunitiesNote] = useState<string | null>(null);
+  const [contributed, setContributed] = useState<number | null>(null);
+  // Until the first load lands, show placeholders — never "0 posts" or
+  // "set your ward" to a member who has both.
+  const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(false);
   const router = useRouter();
 
   const load = useCallback(() => {
-    Promise.all([getMyProfile(), loadFeed(), getMyCommunities()]).then(([p, feed, comms]) => {
+    Promise.all([getMyProfile(), loadFeed(), getMyCommunities(), getMyContributions()]).then(([p, feed, comms, given]) => {
       if (p) setProfile(p);
+      setContributed(given);
+      setLoaded(true);
       if (feed?.available) setFeedPosts(feed.posts);
       setMyCommunities(comms.items);
       setCommunitiesNote(comms.available ? null : comms.reason ?? null);
@@ -128,6 +135,7 @@ export function Profile({
   const mediaPosts = myPosts.filter((p) => p.image);
   const likedPosts = feedPosts.filter((p) => p.liked);
   const likesReceived = myPosts.reduce((sum, p) => sum + p.likes, 0);
+  const count = (n: number) => (loaded ? fmt(n) : "—");
 
   function onSaved(p: ProfileDTO) {
     setProfile(p);
@@ -137,7 +145,7 @@ export function Profile({
   }
 
   return (
-    <div className="no-scrollbar h-full overflow-y-auto">
+    <div className="no-scrollbar pb-fab h-full overflow-y-auto">
       {editing && profile && (
         <EditProfileModal profile={profile} onClose={() => setEditing(false)} onSaved={onSaved} />
       )}
@@ -203,10 +211,10 @@ export function Profile({
 
             {/* Stats */}
             <div className="mt-4 grid grid-cols-4 divide-x divide-[var(--color-line)] rounded-2xl border border-[var(--color-line)]">
-              <Stat value={fmt(myPosts.length)} label="Posts" />
-              <Stat value={fmt(likesReceived)} label="Likes" />
-              <Stat value={fmt(myCommunities.length)} label="Communities" />
-              <Stat value={naira(55_000, true)} label="Given" />
+              <Stat value={count(myPosts.length)} label="Posts" />
+              <Stat value={count(likesReceived)} label="Likes" />
+              <Stat value={count(myCommunities.length)} label="Communities" />
+              <Stat value={!loaded || contributed == null ? "—" : naira(contributed, true)} label="Given" />
             </div>
           </div>
         </div>
@@ -257,10 +265,10 @@ export function Profile({
 
             {/* ============================ Impact stats ============================ */}
             <div className="grid grid-cols-2 gap-3">
-              <Impact icon={<MessageCircle className="h-5 w-5" />} value={fmt(myPosts.length)} label="Posts" />
-              <Impact icon={<Users className="h-5 w-5" />} value={fmt(myCommunities.length)} label="Communities" />
-              <Impact icon={<Wallet className="h-5 w-5" />} value={naira(55_000, true)} label="Contributed" />
-              <Impact icon={<Trophy className="h-5 w-5" />} value={fmt(likesReceived)} label="Likes earned" />
+              <Impact icon={<MessageCircle className="h-5 w-5" />} value={count(myPosts.length)} label="Posts" />
+              <Impact icon={<Users className="h-5 w-5" />} value={count(myCommunities.length)} label="Communities" />
+              <Impact icon={<Wallet className="h-5 w-5" />} value={!loaded || contributed == null ? "—" : naira(contributed, true)} label="Contributed" />
+              <Impact icon={<Trophy className="h-5 w-5" />} value={count(likesReceived)} label="Likes earned" />
             </div>
 
             {/* ============================ Communities ============================ */}
@@ -269,7 +277,16 @@ export function Profile({
                 <Globe2 className="h-4 w-4 text-[var(--color-brand-strong)]" />
                 <h3 className="font-bold text-[var(--color-navy)]">My communities</h3>
               </div>
-              {myCommunities.length === 0 ? (
+              {!loaded ? (
+                <div className="space-y-2" aria-hidden>
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="flex items-center gap-3 p-2">
+                      <span className="size-9 shrink-0 animate-pulse rounded-xl bg-[var(--color-line-soft)]" />
+                      <span className="h-3 w-2/3 animate-pulse rounded-full bg-[var(--color-line-soft)]" />
+                    </div>
+                  ))}
+                </div>
+              ) : myCommunities.length === 0 ? (
                 <p className="text-[13px] text-[var(--color-muted)]">
                   {communitiesNote ?? "Set your State, LGA, Ward and Polling Unit to be placed in your communities."}
                 </p>
@@ -313,7 +330,12 @@ export function Profile({
               </div>
 
               <div className="divide-y divide-[var(--color-line)]">
-                {tab === "Posts" &&
+                {!loaded ? (
+                  <div className="grid place-items-center py-14" aria-label="Loading">
+                    <span className="size-6 animate-spin rounded-full border-2 border-[var(--color-line)] border-t-[var(--color-brand)]" />
+                  </div>
+                ) : null}
+                {loaded && tab === "Posts" &&
                   (timelinePosts.length === 0 ? (
                     <Empty icon={<MessageCircle className="h-7 w-7" />} text="Your posts will appear here — share your first one from Home." />
                   ) : (
@@ -322,7 +344,7 @@ export function Profile({
                     ))
                   ))}
 
-                {tab === "Media" &&
+                {loaded && tab === "Media" &&
                   (mediaPosts.length === 0 ? (
                     <Empty icon={<ImageIcon className="h-7 w-7" />} text="Photos you post will appear here." />
                   ) : (
@@ -335,7 +357,7 @@ export function Profile({
                     </div>
                   ))}
 
-                {tab === "Communities" &&
+                {loaded && tab === "Communities" &&
                   (myCommunities.length === 0 ? (
                     <Empty icon={<Globe2 className="h-7 w-7" />} text={communitiesNote ?? "Your geo communities will appear here."} />
                   ) : (
@@ -357,7 +379,7 @@ export function Profile({
                     </div>
                   ))}
 
-                {tab === "Likes" &&
+                {loaded && tab === "Likes" &&
                   (likedPosts.length === 0 ? (
                     <Empty icon={<Heart className="h-7 w-7" />} text="Posts you like will appear here." />
                   ) : (
@@ -385,9 +407,9 @@ function Empty({ icon, text }: { icon: React.ReactNode; text: string }) {
 
 function Stat({ value, label }: { value: string; label: string }) {
   return (
-    <div className="py-3 text-center">
-      <div className="text-lg font-extrabold text-[var(--color-navy)]">{value}</div>
-      <div className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-faint)]">{label}</div>
+    <div className="min-w-0 px-1 py-3 text-center">
+      <div className="truncate text-base font-extrabold tabular-nums text-[var(--color-navy)] sm:text-lg">{value}</div>
+      <div className="truncate text-[9.5px] font-semibold uppercase tracking-wide text-[var(--color-faint)] sm:text-[10px]">{label}</div>
     </div>
   );
 }
@@ -434,7 +456,7 @@ function ProfilePost({ post, repostedByMe = false }: { post: FeedPost; repostedB
               <Globe2 className="h-3 w-3" /> {post.community}
             </span>
           )}
-          <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-ink-soft)]">{post.text}</p>
+          <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-ink-soft)]">{post.text.trim()}</p>
           {post.image && (
             <div className="mt-3 overflow-hidden rounded-xl border border-[var(--color-line)]">
               <img src={post.image} alt="" className="max-h-80 w-full object-cover" />
