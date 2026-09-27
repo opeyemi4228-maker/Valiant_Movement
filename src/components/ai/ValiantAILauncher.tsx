@@ -14,10 +14,7 @@ const WAKE = new RegExp(
 );
 const WAKE_PREF_KEY = "valiant-ai:wake";
 
-export function ValiantAILauncher({
-  raised = false,
-  hideOnPhone = false,
-}: { raised?: boolean; hideOnPhone?: boolean } = {}) {
+export function ValiantAILauncher({ hideButton = false }: { hideButton?: boolean } = {}) {
   const [open, setOpen] = useState(false);
   const [wakeOn, setWakeOn] = useState(false);
   const [wakeGreeting, setWakeGreeting] = useState(false);
@@ -197,14 +194,8 @@ export function ValiantAILauncher({
 
       {/* Floating controls — pushed up on screens with a bottom composer
           (e.g. the chat) so the orb never sits on the voice-note / send button. */}
-      {!open && (
-        <div
-          className={`fixed z-[65] flex flex-col items-end gap-2 ${hideOnPhone ? "max-md:hidden" : ""} ${
-            raised
-              ? "bottom-[calc(8.5rem+env(safe-area-inset-bottom))] right-3 sm:bottom-24 sm:right-6"
-              : "bottom-[calc(4.75rem+env(safe-area-inset-bottom))] right-3 sm:bottom-6 sm:right-6"
-          }`}
-        >
+      {!open && !hideButton && (
+        <div className="fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom))] right-3 z-[65] flex flex-col items-end gap-2 sm:bottom-6 sm:right-6">
           {/* heard flash */}
           {heard && (
             <span className="rounded-full bg-[var(--color-green)] px-3 py-1 text-xs font-bold text-white shadow-lg">
@@ -212,7 +203,7 @@ export function ValiantAILauncher({
             </span>
           )}
 
-          {/* wake toggle */}
+          {/* wake toggle — desktop only; on phones the single orb keeps it simple */}
           {supported && (
             <button
               onClick={() => {
@@ -229,7 +220,7 @@ export function ValiantAILauncher({
                   : "Listen for “Hey Valiant AI”"
               }
               aria-label={voiceErr ? "Voice off — tap to retry" : wakeOn && needsMic ? "Allow microphone" : wakeOn ? "Listening for wake word" : "Enable wake word"}
-              className={`flex max-w-[220px] items-center gap-1.5 rounded-full p-2 text-xs font-semibold shadow-md transition sm:px-3 sm:py-1.5 ${
+              className={`hidden max-w-[220px] items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-md transition sm:flex ${
                 voiceErr
                   ? "bg-[var(--color-danger)] text-white"
                   : wakeOn && needsMic
@@ -240,8 +231,7 @@ export function ValiantAILauncher({
               }`}
             >
               {voiceErr || !wakeOn ? <EarOff className="h-3.5 w-3.5 shrink-0" /> : <Ear className="h-3.5 w-3.5 shrink-0" />}
-              {/* Icon-only on phones so the chip never sits over content */}
-              <span className="hidden truncate sm:inline">
+              <span className="truncate">
                 {voiceErr ? "Voice off" : wakeOn && needsMic ? "Allow mic" : wakeOn ? "Listening" : "Wake word"}
               </span>
             </button>

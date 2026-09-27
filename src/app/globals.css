@@ -6,17 +6,17 @@
    ============================================================ */
 
 @theme inline {
-  --color-bg: #f7f5f2;
+  --color-bg: #ffffff;           /* pure white canvas */
   --color-surface: #ffffff;
-  --color-surface-2: #faf7f3;
+  --color-surface-2: #f8f8f8;    /* neutral hover / inset well */
 
   --color-ink: #1a1410;          /* near-black, warm */
   --color-ink-soft: #423a33;
   --color-muted: #7a7068;
   --color-faint: #a8a098;
 
-  --color-line: #ece7e0;
-  --color-line-soft: #f3efe9;
+  --color-line: #ebebeb;
+  --color-line-soft: #f3f3f3;
 
   /* Brand — orange */
   --color-navy: #1a1410;         /* kept name for headings; now warm near-black */
@@ -115,6 +115,89 @@ body {
   background: var(--color-faint);
 }
 
+/* ---- Valiant signature motion (plain CSS so it is always emitted) ---- */
+
+/* "Support" (like) — the heart springs when tapped */
+@keyframes vm-support {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.35); }
+  65% { transform: scale(0.92); }
+  100% { transform: scale(1); }
+}
+.animate-support {
+  animation: vm-support 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* A little eagle that takes off from the Support button */
+@keyframes vm-takeoff {
+  0% { opacity: 0; transform: translate(0, 4px) scale(0.6); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: translate(10px, -30px) scale(1.1) rotate(-12deg); }
+}
+.animate-takeoff {
+  animation: vm-takeoff 0.9s ease-out forwards;
+}
+
+/* Double-tap on a photo: the eagle lands big, then fades */
+@keyframes vm-soar {
+  0% { opacity: 0; transform: scale(0.4) translateY(20px); }
+  30% { opacity: 1; transform: scale(1.15) translateY(0); }
+  70% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.05) translateY(-24px); }
+}
+.animate-soar {
+  animation: vm-soar 0.9s ease-out forwards;
+}
+
+/* Active bottom-tab icon hop */
+@keyframes vm-hop {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-4px); }
+  70% { transform: translateY(1px); }
+}
+.animate-hop {
+  animation: vm-hop 0.4s ease-out;
+}
+
+/* Soft fade between rotating composer prompts */
+@keyframes vm-fade {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+.animate-fade {
+  animation: vm-fade 0.4s ease both;
+}
+
+/* Chat wallpaper — a warm Valiant wash with faint orange dots */
+.chat-wall {
+  background-color: #fcf8f3;
+  background-image: radial-gradient(color-mix(in srgb, var(--color-brand) 20%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Signature line under app bars and page headers */
+.valiant-rule {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-brand) 0%,
+    var(--color-amber) 45%,
+    var(--color-green) 100%
+  );
+}
+
+/* Story ring — Valiant orange flowing into Nigerian green. Plain CSS (not a
+   Tailwind utility) so it's always emitted. */
+.story-ring {
+  background-image: conic-gradient(
+    from 210deg,
+    var(--color-brand),
+    var(--color-amber),
+    var(--color-green),
+    var(--color-brand-2),
+    var(--color-brand)
+  );
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;
@@ -148,6 +231,7 @@ body {
   .animate-pop {
     animation: vm-pop 0.3s ease both;
   }
+
 
   /* Bottom breathing room on a panel's scroll container so its last item can
      scroll clear of the floating Valiant AI button. */
@@ -198,7 +282,7 @@ body {
     color: var(--color-faint);
   }
   .field:hover {
-    border-color: #ddd5cb;
+    border-color: #d9d9d9;
   }
   .field:focus {
     border-color: var(--color-brand);

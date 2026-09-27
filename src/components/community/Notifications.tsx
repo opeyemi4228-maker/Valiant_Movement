@@ -8,7 +8,6 @@ import {
   MessageCircle,
   AtSign,
   Users,
-  Bell,
   Bookmark,
   Phone,
   BadgeCheck,
@@ -21,9 +20,10 @@ import {
 import { getNotifications, markNotificationsRead } from "@/app/actions/notifications";
 import type { NotificationDTO, NotifType } from "@/lib/notif-types";
 import { PageHeader } from "./PageHeader";
+import { ValiantEmpty, ValiantLoader } from "@/components/ui/valiant";
 
 const META: Record<NotifType, { icon: typeof Heart; color: string }> = {
-  like: { icon: Heart, color: "var(--color-danger)" },
+  like: { icon: Heart, color: "var(--color-brand-strong)" }, // "Support" — matches the feed
   comment: { icon: MessageCircle, color: "#0ea5e9" },
   repost: { icon: Repeat2, color: "var(--color-green)" },
   follow: { icon: UserPlus, color: "var(--color-brand)" },
@@ -37,12 +37,13 @@ const META: Record<NotifType, { icon: typeof Heart; color: string }> = {
   dues: { icon: CalendarClock, color: "var(--color-amber)" },
 };
 
+/** "Just now" · "5m ago" · "3d ago" · "05 Aug" (no "ago" on a date). */
 function timeAgo(iso: string) {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 45) return "now";
-  if (s < 3600) return Math.floor(s / 60) + "m";
-  if (s < 86400) return Math.floor(s / 3600) + "h";
-  if (s < 604800) return Math.floor(s / 86400) + "d";
+  if (s < 45) return "Just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  if (s < 604800) return Math.floor(s / 86400) + "d ago";
   return new Date(iso).toLocaleDateString([], { day: "2-digit", month: "short" });
 }
 
@@ -148,7 +149,7 @@ export function Notifications({
       <Header title={title} unreadCount={unreadCount} onMarkAll={markAll} />
 
       {/* Filter tabs */}
-      <div className="sticky top-[57px] z-10 flex gap-1 border-b border-[var(--color-line)] bg-white/90 px-3 py-2 backdrop-blur">
+      <div className="flex gap-2 px-4 py-3">
         {FILTERS.map((f) => {
           const active = filter === f.key;
           const count = f.key === "unread" ? unreadCount : 0;
@@ -156,13 +157,16 @@ export function Notifications({
             <button
               key={f.key}
               onClick={() => setFilter(f.key)}
-              className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-semibold transition ${
-                active ? "bg-[var(--color-navy)] text-white" : "text-[var(--color-muted)] hover:bg-[var(--color-surface-2)]"
+              aria-pressed={active}
+              className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-[14px] font-semibold transition ${
+                active
+                  ? "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
+                  : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
               }`}
             >
               {f.label}
               {count > 0 && (
-                <span className={`grid h-4 min-w-4 place-items-center rounded-full px-1 text-[10px] font-bold ${active ? "bg-white/25 text-white" : "bg-[var(--color-brand)] text-white"}`}>
+                <span className="grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[10px] font-bold text-white">
                   {count}
                 </span>
               )}
@@ -173,21 +177,18 @@ export function Notifications({
 
       {/* List / empty / loading */}
       {!loaded ? (
-        <div className="grid place-items-center py-24 text-sm text-[var(--color-faint)]">Loading notifications…</div>
+        <ValiantLoader className="py-24" />
       ) : groups.length === 0 ? (
-        <div className="grid place-items-center px-6 py-24 text-center">
-          <div className="mb-4 grid size-16 place-items-center rounded-2xl bg-[var(--color-surface-2)]">
-            <CheckCheck className="h-7 w-7 text-[var(--color-faint)]" />
-          </div>
-          <h2 className="text-lg font-bold text-[var(--color-navy)]">You&apos;re all caught up</h2>
-          <p className="mt-1 max-w-sm text-sm text-[var(--color-muted)]">
-            {filter === "unread" ? "No unread notifications." : "Likes, comments, calls and mentions will show up here."}
-          </p>
-        </div>
+        <ValiantEmpty
+          className="py-24"
+          title="You're all caught up"
+          text={filter === "unread" ? "No unread notifications." : "Support, comments, calls and dues reminders will show up here."}
+          motto
+        />
       ) : (
         groups.map((section) => (
           <section key={section.key}>
-            <h2 className="bg-[var(--color-surface-2)]/60 px-5 py-2 text-xs font-bold uppercase tracking-wider text-[var(--color-faint)]">
+            <h2 className="px-4 pb-1 pt-4 text-[15px] font-bold text-[var(--color-ink)]">
               {GROUP_LABEL[section.key]}
             </h2>
             {section.items.map((n) => (
@@ -215,10 +216,8 @@ function Header({
 }) {
   return (
     <PageHeader
-      kicker="Your Space"
       title={title}
       subtitle={bookmarks ? "Posts you saved to return to" : "What the movement did for you"}
-      icon={bookmarks ? <Bookmark className="h-3 w-3" /> : <Bell className="h-3 w-3" />}
       count={unreadCount}
       trailing={
         <div className="flex items-center gap-1">
@@ -248,36 +247,33 @@ function Row({ n }: { n: NotificationDTO }) {
   const Icon = meta.icon;
   return (
     <div
-      className={`relative flex items-start gap-3 border-b border-[var(--color-line)] px-5 py-4 transition hover:bg-[var(--color-surface-2)] ${
-        !n.read ? "bg-[var(--color-brand-tint)]/40" : ""
+      className={`flex items-start gap-3 px-4 py-3 transition hover:bg-[var(--color-surface-2)] ${
+        !n.read ? "bg-[var(--color-brand-tint)]/35" : ""
       }`}
     >
-      {!n.read && <span className="absolute inset-y-0 left-0 w-[3px] bg-[var(--color-brand)]" />}
-
-      {/* avatar (actor initials) with type badge */}
+      {/* avatar (actor initials) with a type badge */}
       <div className="relative shrink-0">
         <span
-          className="grid size-[46px] place-items-center rounded-full text-sm font-bold text-white"
+          className="grid size-11 place-items-center rounded-full text-[14px] font-bold text-white"
           style={{ backgroundColor: meta.color }}
         >
-          {n.actorName ? initials(n.actorName) : <Icon className="h-6 w-6" />}
+          {n.actorName ? initials(n.actorName) : <Icon className="h-5 w-5" />}
         </span>
         <span
-          className="absolute -bottom-1 -right-1 grid size-5 place-items-center rounded-full ring-2 ring-white"
+          className="absolute -bottom-0.5 -right-0.5 grid size-5 place-items-center rounded-full ring-2 ring-white"
           style={{ background: meta.color }}
         >
           <Icon className={`h-3 w-3 text-white ${n.type === "like" ? "fill-current" : ""}`} />
         </span>
       </div>
 
-      {/* body */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-[14px] leading-relaxed text-[var(--color-ink-soft)]">{n.body}</p>
-          {!n.read && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-[var(--color-brand)]" />}
-        </div>
-        <span className="mt-1 block text-xs text-[var(--color-faint)]">{timeAgo(n.at)} ago</span>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <p className={`text-[14.5px] leading-snug ${n.read ? "text-[var(--color-ink-soft)]" : "font-medium text-[var(--color-ink)]"}`}>
+          {n.body}
+        </p>
+        <span className="mt-1 block text-[12.5px] text-[var(--color-faint)]">{timeAgo(n.at)}</span>
       </div>
+      {!n.read && <span aria-label="Unread" className="mt-2 size-2.5 shrink-0 rounded-full bg-[var(--color-brand)]" />}
     </div>
   );
 }

@@ -8,7 +8,8 @@ import { getActiveHuddle, startCommunityHuddle } from "@/app/actions/huddle";
 import { HuddleRoom } from "@/components/call/HuddleRoom";
 import type { CommunityDTO } from "@/lib/communities";
 import { Avatar } from "./Avatar";
-import { AudioNote, CallEventRow, Composer, FileCard, ImageMedia, clock, colorFor } from "./chat-shared";
+import { AudioNote, CallEventRow, ChatWelcome, Composer, FileCard, ImageMedia, clock, colorFor } from "./chat-shared";
+import { ValiantLoader } from "@/components/ui/valiant";
 
 /* ============================================================
    Community group chat — WhatsApp-style. Every member of the
@@ -272,7 +273,7 @@ export function CommunityChat({
   if (state === "joining") {
     return (
       <div className="grid h-full place-items-center bg-white">
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+        <ValiantLoader />
       </div>
     );
   }
@@ -296,7 +297,7 @@ export function CommunityChat({
   }
 
   return (
-    <div className="relative flex h-full flex-col" style={{ backgroundColor: "#f3ede4" }}>
+    <div className="relative flex h-full flex-col" style={{ backgroundColor: "var(--color-bg)" }}>
       {huddle && (
         <HuddleRoom
           huddleId={huddle.huddleId}
@@ -314,7 +315,7 @@ export function CommunityChat({
           </div>
         </div>
       )}
-      <div className="pointer-events-none absolute inset-0 opacity-[0.04]" style={{ backgroundImage: "radial-gradient(var(--color-ink) 1px, transparent 1px)", backgroundSize: "18px 18px" }} />
+      <div className="chat-wall pointer-events-none absolute inset-0" />
 
       {/* header */}
       <header className="relative z-10 flex items-center gap-3 border-b border-[var(--color-line)] bg-white px-4 py-2.5">
@@ -391,11 +392,6 @@ export function CommunityChat({
             <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" />
             Every member here is NIN-verified · run by {community.controlledBy}
           </div>
-          {messages.length === 0 && (
-            <p className="py-10 text-center text-sm text-[var(--color-muted)]">
-              No messages yet — be the first to greet your community 👋
-            </p>
-          )}
           {messages.map((m, i) => {
             if (m.media?.kind === "system") {
               return (
@@ -461,6 +457,15 @@ export function CommunityChat({
               </div>
             );
           })}
+          {/* Welcome sits last, just above the composer */}
+          {!messages.some((m) => m.media?.kind !== "system") && (
+            <ChatWelcome
+              title={`Welcome to ${community.name}`}
+              text="Say hello to your neighbours. Everyone here is a verified member of the movement."
+              replies={["👋 Hello everyone!", "🦅 Courage to lead!", "💪 Ready to serve"]}
+              onSend={(r) => send(r)}
+            />
+          )}
         </div>
       </div>
 

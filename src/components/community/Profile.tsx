@@ -36,6 +36,7 @@ import type { CommunityDTO } from "@/lib/communities";
 import type { FeedPost } from "@/lib/feed-types";
 import type { ProfileDTO } from "@/lib/demo-store";
 import { Avatar } from "./Avatar";
+import { ValiantEmpty, ValiantLoader } from "@/components/ui/valiant";
 
 function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
@@ -331,9 +332,7 @@ export function Profile({
 
               <div className="divide-y divide-[var(--color-line)]">
                 {!loaded ? (
-                  <div className="grid place-items-center py-14" aria-label="Loading">
-                    <span className="size-6 animate-spin rounded-full border-2 border-[var(--color-line)] border-t-[var(--color-brand)]" />
-                  </div>
+                  <ValiantLoader className="py-14" />
                 ) : null}
                 {loaded && tab === "Posts" &&
                   (timelinePosts.length === 0 ? (
@@ -397,12 +396,7 @@ export function Profile({
 /* -------------------------------- pieces -------------------------------- */
 
 function Empty({ icon, text }: { icon: React.ReactNode; text: string }) {
-  return (
-    <div className="grid place-items-center px-6 py-16 text-center">
-      <span className="mb-2 text-[var(--color-faint)]">{icon}</span>
-      <p className="text-sm text-[var(--color-muted)]">{text}</p>
-    </div>
-  );
+  return <ValiantEmpty icon={icon} title="Nothing here yet" text={text} />;
 }
 
 function Stat({ value, label }: { value: string; label: string }) {

@@ -9,7 +9,6 @@ import {
   Users,
   Search,
   ChevronRight,
-  Loader2,
   MapPin,
   TrendingUp,
   Layers,
@@ -18,6 +17,7 @@ import {
 } from "lucide-react";
 import { getChapters, type ChaptersResult } from "@/app/actions/associations";
 import type { ChapterLevel, ChapterPath, ChapterRow } from "@/lib/associations-db";
+import { ValiantLoader } from "@/components/ui/valiant";
 
 function fmt(n: number) {
   return n.toLocaleString("en-NG");
@@ -214,7 +214,7 @@ export function Associations({ focus }: { focus?: string } = {}) {
       <div className="mt-3 overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white">
         {loading && !view ? (
           <div className="grid place-items-center py-20">
-            <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+            <ValiantLoader />
           </div>
         ) : !data?.ok ? (
           <div className="grid place-items-center py-16 text-center text-sm text-[var(--color-muted)]">

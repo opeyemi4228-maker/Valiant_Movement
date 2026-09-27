@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Bookmark, Loader2 } from "lucide-react";
+import { Bookmark } from "lucide-react";
 import { loadBookmarks, likePost, repostPost, commentPost, bookmarkPost } from "@/app/actions/feed";
 import type { FeedPost } from "@/lib/feed-types";
 import { PostCard } from "./LiveFeed";
 import { PageHeader } from "./PageHeader";
+import { ValiantEmpty, ValiantLoader } from "@/components/ui/valiant";
 
 /**
  * Bookmarks tab — the member's saved posts. Reuses the feed's PostCard so a
@@ -69,30 +70,25 @@ export function Bookmarks({ me, active = true }: { me: { name: string; avatar?: 
   return (
     <div className="pb-fab h-full overflow-y-auto">
       <PageHeader
-        kicker="Your Space"
         title="Bookmarks"
         subtitle="Posts you saved to return to"
-        icon={<Bookmark className="h-3 w-3" />}
         count={loaded ? posts.length : undefined}
       />
 
-      <div className="mx-auto w-full max-w-[680px] px-4 py-5">
+      <div className="mx-auto w-full max-w-[640px]">
         {!loaded ? (
           <div className="grid place-items-center py-20">
-            <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+            <ValiantLoader />
           </div>
         ) : posts.length === 0 ? (
-          <div className="grid place-items-center px-6 py-20 text-center">
-            <div className="mb-4 grid size-16 place-items-center rounded-2xl bg-[var(--color-brand-tint)]">
-              <Bookmark className="h-7 w-7 text-[var(--color-brand-strong)]" />
-            </div>
-            <h2 className="text-lg font-bold text-[var(--color-navy)]">Save posts for later</h2>
-            <p className="mt-1 max-w-sm text-sm text-[var(--color-muted)]">
-              Tap the bookmark icon on any post in your Home feed and it&apos;ll show up here — only you can see your bookmarks.
-            </p>
-          </div>
+          <ValiantEmpty
+            className="py-20"
+            icon={<Bookmark className="h-7 w-7" />}
+            title="Save posts for later"
+            text="Tap the bookmark on any post in Home and it'll wait for you here. Only you can see your bookmarks."
+          />
         ) : (
-          <div className="space-y-3">
+          <div className="bg-white sm:border-x sm:border-[var(--color-line)]">
             {posts.map((post) => (
               <PostCard
                 key={post.id}

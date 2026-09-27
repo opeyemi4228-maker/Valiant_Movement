@@ -31,6 +31,7 @@ import { RealtimePresence } from "./RealtimePresence";
 import { ValiantAILauncher } from "@/components/ai/ValiantAILauncher";
 import { CallCenter } from "@/components/call/CallCenter";
 import type { ThreadDetail } from "./chat-shared";
+import { ValiantRule } from "@/components/ui/valiant";
 
 type Tab = "home" | "communities" | "messages" | "finance" | "notifications" | "bookmarks" | "profile";
 
@@ -234,7 +235,7 @@ export function MemberShell({
         {/* Mobile top bar — brand on the left; Bookmarks + Profile (the two
             destinations that don't fit the five-tab bottom bar) on the right. */}
         <header
-          className={`shrink-0 border-b border-[var(--color-line)] bg-white pt-[env(safe-area-inset-top)] lg:hidden ${
+          className={`shrink-0 bg-white pt-[env(safe-area-inset-top)] lg:hidden ${
             immersive ? "max-md:hidden" : ""
           }`}
         >
@@ -275,6 +276,7 @@ export function MemberShell({
               </button>
             </div>
           </div>
+          <ValiantRule />
         </header>
 
         {/* Content — once a tab has been visited it stays mounted (hidden via
@@ -357,7 +359,7 @@ export function MemberShell({
                   <Icon
                     size={22}
                     strokeWidth={active ? 2.4 : 2}
-                    className={active ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"}
+                    className={active ? "animate-hop text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"}
                   />
                   {badge > 0 && (
                     <span className="absolute right-2 -top-1 grid h-[16px] min-w-[16px] place-items-center rounded-full bg-[var(--color-brand-strong)] px-1 text-[9px] font-bold leading-none text-white ring-2 ring-white">
@@ -381,10 +383,11 @@ export function MemberShell({
       {/* Real-time: incoming-call ringing + new-message notifications */}
       <RealtimePresence />
 
-      {/* Valiant AI — voice + text assistant, available app-wide. Raised on
-          the chat tabs (Messages + community group chat) so the orb clears
-          the message composer (voice note + send). */}
-      <ValiantAILauncher raised={tab === "messages" || tab === "communities"} hideOnPhone={immersive} />
+      {/* Valiant AI. Like WhatsApp's assistant, it lives as a chat at the top
+          of Messages, so the floating button is left off the two chat tabs
+          (Messages, Communities) where it would sit on the message box. It
+          still opens from that chat row via the "valiant-ai:open" event. */}
+      <ValiantAILauncher hideButton={tab === "messages" || tab === "communities"} />
 
       {/* App-wide calling: rings, waits for pickup, and dings on new messages. */}
       <CallCenter />
@@ -481,7 +484,7 @@ function SidebarInner({
                     <span className={`absolute left-0 top-1/2 h-6 w-[3px] -translate-y-1/2 rounded-r-full bg-[var(--color-brand)] ${expanded ? "" : "hidden xl:block"}`} />
                   )}
                   <span className="relative">
-                    <Icon className="h-5 w-5" strokeWidth={active ? 2.4 : 1.9} />
+                    <Icon className={`h-5 w-5 ${active ? "animate-hop" : ""}`} strokeWidth={active ? 2.4 : 1.9} />
                     {badge ? (
                       <span className="absolute -right-2 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[9px] font-bold text-white">
                         {badge > 9 ? "9+" : badge}

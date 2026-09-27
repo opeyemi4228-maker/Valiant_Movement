@@ -5,14 +5,11 @@ import {
   Users,
   MapPin,
   Megaphone,
-  ShieldCheck,
-  ChevronRight,
   Landmark,
   Globe2,
   Home,
   Vote,
   X,
-  Loader2,
   Phone,
   Video,
 } from "lucide-react";
@@ -22,6 +19,7 @@ import type { StartCallDetail } from "@/components/call/CallCenter";
 import { Avatar } from "./Avatar";
 import { CommunityChat } from "./CommunityChat";
 import { colorFor, useThreadMode } from "./chat-shared";
+import { ValiantEmpty, ValiantLoader } from "@/components/ui/valiant";
 
 function fmt(n: number) {
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, "") + "K";
@@ -102,7 +100,7 @@ export function Communities() {
   if (!res) {
     return (
       <div className="grid h-full place-items-center">
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+        <ValiantLoader />
       </div>
     );
   }
@@ -135,33 +133,32 @@ export function Communities() {
           pattern as Messages, so switching groups never means leaving and
           re-entering. ===================== */}
       <div className={`flex h-full w-full shrink-0 flex-col overflow-y-auto pb-fab border-r border-[var(--color-line)] bg-white md:w-[340px] ${chat ? "hidden md:flex" : "flex"}`}>
-        <div className="border-b border-[var(--color-line)] px-4 py-3.5">
-          <div className="text-[10.5px] font-bold uppercase tracking-[0.2em] text-[var(--color-brand-strong)]">
-            The Movement
-          </div>
-          <h1 className="mt-0.5 text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Communities</h1>
-          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px] font-medium text-[var(--color-ink-soft)]">
-            <MapPin className="h-3.5 w-3.5 text-[var(--color-brand-strong)]" />
-            {[p?.state && `${p.state} State`, p?.lga && `${p.lga} LGA`, p?.ward, p?.pollingUnit]
-              .filter(Boolean)
-              .map((g, i, arr) => (
-                <span key={g as string} className="flex items-center gap-1.5">
-                  <span className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5">{g}</span>
-                  {i < arr.length - 1 && <ChevronRight className="h-3 w-3 text-[var(--color-faint)]" />}
-                </span>
-              ))}
-          </div>
+        <div className="border-b border-[var(--color-line)] px-4 pb-3 pt-4">
+          <h1 className="text-[22px] font-extrabold leading-tight tracking-tight text-[var(--color-ink)]">Communities</h1>
+          <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[13px] text-[var(--color-muted)]">
+            <MapPin className="h-3.5 w-3.5 shrink-0 text-[var(--color-brand-strong)]" />
+            <span className="truncate">
+              {[p?.state, p?.lga, p?.ward, p?.pollingUnit].filter(Boolean).join(" › ") || "Your place in the movement"}
+            </span>
+          </p>
         </div>
 
-        <div className="min-h-0 flex-1">
+        {/* Grows with its rows but never shrinks below them (flex-1 + min-h-0
+            inside this scrolling column let the footer draw over the last row). */}
+        <div className="flex-[1_0_auto]">
           {ordered.length === 0 ? (
-            <p className="px-4 py-10 text-center text-sm text-[var(--color-muted)]">No communities yet.</p>
+            <ValiantEmpty
+              icon={<Users className="h-7 w-7" />}
+              title="No communities yet"
+              text="Set your State, LGA, Ward and Polling Unit in your profile and you'll join your people automatically."
+            />
           ) : (
             ordered.map((c, i) => (
               <GroupRow
                 key={c.id}
                 c={c}
                 first={i === 0}
+                last={i === ordered.length - 1}
                 active={chat?.id === c.id}
                 unread={unreadByCommunity[c.id] ?? 0}
                 onOpen={() => openChat(c)}
@@ -170,21 +167,21 @@ export function Communities() {
           )}
         </div>
 
-        <p className="border-t border-[var(--color-line)] px-4 py-3 text-[11px] leading-relaxed text-[var(--color-faint)]">
-          Your placement comes from your registration (State › LGA › Ward › Polling Unit), verified by NIN.
+        <p className="px-4 py-4 text-center text-[11.5px] leading-relaxed text-[var(--color-faint)]">
+          🦅 Placed by your registration and verified by NIN
         </p>
       </div>
 
       {/* ===================== Chat panel ===================== */}
       <div className={`relative h-full min-w-0 flex-1 flex-col ${chat ? "flex" : "hidden md:flex"}`}>
         {!chat ? (
-          <div className="grid h-full place-items-center text-center">
-            <div>
-              <div className="mx-auto mb-3 grid size-16 place-items-center rounded-full bg-[var(--color-surface-2)] text-[var(--color-brand-strong)]">
-                <Users className="h-8 w-8" />
-              </div>
-              <p className="text-sm font-medium text-[var(--color-muted)]">Select a community to open its group chat</p>
-            </div>
+          <div className="grid h-full place-items-center bg-[var(--color-surface-2)]/50">
+            <ValiantEmpty
+              icon={<Users className="h-7 w-7" />}
+              title="Your people, by place"
+              text="Pick a community to open its group chat."
+              motto
+            />
           </div>
         ) : (
           // No `key` here on purpose — keying on chat.id would force a full
@@ -209,12 +206,14 @@ export function Communities() {
 function GroupRow({
   c,
   first,
+  last,
   active,
   unread,
   onOpen,
 }: {
   c: CommunityDTO;
   first: boolean;
+  last: boolean;
   active: boolean;
   unread: number;
   onOpen: () => void;
@@ -224,30 +223,26 @@ function GroupRow({
   return (
     <button
       onClick={onOpen}
-      className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition ${
+      className={`flex w-full items-center gap-3 px-4 py-3 text-left transition ${
         active ? "bg-[var(--color-brand-tint)]/60" : "hover:bg-[var(--color-surface-2)]"
-      } ${first ? "" : "border-t border-[var(--color-line)]"}`}
+      }`}
     >
-      <span
-        className="grid size-11 shrink-0 place-items-center rounded-xl"
-        style={{ backgroundColor: `color-mix(in srgb, ${meta.color} 14%, transparent)`, color: meta.color }}
-      >
-        <Icon className="h-5 w-5" />
+      {/* The chain: a line links State → LGA → Ward → Polling Unit, so the
+          list reads as the member's own place in the movement. */}
+      <span className="relative shrink-0">
+        {!first && <span aria-hidden className="absolute bottom-full left-1/2 h-3 w-0.5 -translate-x-1/2 bg-[var(--color-brand)]/35" />}
+        {!last && <span aria-hidden className="absolute left-1/2 top-full h-3 w-0.5 -translate-x-1/2 bg-[var(--color-brand)]/35" />}
+        <span
+          className="grid size-12 place-items-center rounded-full ring-4 ring-white"
+          style={{ backgroundColor: `color-mix(in srgb, ${meta.color} 14%, white)`, color: meta.color }}
+        >
+          <Icon className="h-5 w-5" />
+        </span>
       </span>
       <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="truncate text-[15px] font-bold text-[var(--color-ink)]">{c.name}</span>
-          <span className="shrink-0 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-[var(--color-muted)]">
-            {meta.label}
-          </span>
-        </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[12px] text-[var(--color-muted)]">
-          <span className="flex items-center gap-1 font-semibold text-[var(--color-ink-soft)]">
-            <Users className="h-3 w-3" /> {fmt(c.memberCount)}
-          </span>
-          <span className="flex items-center gap-1">
-            <ShieldCheck className="h-3 w-3" /> {c.controlledBy}
-          </span>
+        <span className="block truncate text-[16px] font-semibold text-[var(--color-ink)]">{c.name}</span>
+        <span className="mt-0.5 block truncate text-[13.5px] text-[var(--color-muted)]">
+          {meta.label} · {fmt(c.memberCount)} member{c.memberCount === 1 ? "" : "s"} · {c.controlledBy}
         </span>
       </span>
       {unread > 0 && (
@@ -255,7 +250,6 @@ function GroupRow({
           {unread > 99 ? "99+" : unread}
         </span>
       )}
-      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--color-faint)]" />
     </button>
   );
 }
@@ -311,7 +305,7 @@ function MembersSheet({ community, onClose }: { community: CommunityDTO; onClose
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {!members ? (
             <div className="grid place-items-center py-10">
-              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-brand)]" />
+              <ValiantLoader />
             </div>
           ) : members.length === 0 ? (
             <p className="py-10 text-center text-sm text-[var(--color-muted)]">No members yet.</p>

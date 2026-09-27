@@ -13,6 +13,7 @@ import { MeetingsManager } from "./MeetingsManager";
 import { GatheringsManager } from "./GatheringsManager";
 import { Associations } from "./Associations";
 import { ValiantAILauncher } from "@/components/ai/ValiantAILauncher";
+import { ValiantRule } from "@/components/ui/valiant";
 import type { AdminRole } from "@/data/admin-roles";
 import { NIGERIA } from "@/data/nigeria";
 
@@ -81,7 +82,8 @@ export function AdminShell({ role }: { role: AdminRole }) {
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-[var(--color-bg)]">
       {/* ============================ Top bar ============================ */}
-      <header className="box-content flex h-16 shrink-0 items-stretch border-b border-[var(--color-line)] bg-white pt-[env(safe-area-inset-top)]">
+      <header className="relative box-content flex h-16 shrink-0 items-stretch bg-white pt-[env(safe-area-inset-top)]">
+        <ValiantRule className="absolute inset-x-0 bottom-0" />
         {/* Brand zone — aligns over the sidebar (rail 64 + panel 288 = 352) */}
         <div className="hidden w-[352px] shrink-0 items-center border-r border-[var(--color-line)] lg:flex">
           <div className="grid w-16 place-items-center">

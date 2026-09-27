@@ -10,6 +10,8 @@ import {
   Check,
   CheckCheck,
   ShieldCheck,
+  BadgeCheck,
+  Pin,
   PenSquare,
   Sparkles,
   Plus,
@@ -37,7 +39,8 @@ import { reportMember, type ReportCategory } from "@/app/actions/reports";
 import type { CallEligibility } from "@/lib/demo-store";
 import type { StartCallDetail } from "@/components/call/CallCenter";
 import { Avatar } from "./Avatar";
-import { AudioNote, CallEventRow, Composer, FileCard, ImageMedia, clock, colorFor, fmtTime, useThreadMode } from "./chat-shared";
+import { AudioNote, CallEventRow, ChatWelcome, Composer, FileCard, ImageMedia, clock, colorFor, fmtTime, useThreadMode } from "./chat-shared";
+import { ValiantEmpty, ValiantLoader } from "@/components/ui/valiant";
 
 function dayLabel(iso: string | null) {
   if (!iso) return "";
@@ -104,6 +107,7 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [query, setQuery] = useState("");
+  const [listFilter, setListFilter] = useState<"all" | "unread">("all");
   const [showThread, setShowThread] = useState(false);
   const [picker, setPicker] = useState(false);
   const [eligibility, setEligibility] = useState<CallEligibility | null>(null);
@@ -346,7 +350,7 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
   if (state === "loading") {
     return (
       <div className="grid h-full place-items-center bg-white">
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+        <ValiantLoader />
       </div>
     );
   }
@@ -367,7 +371,10 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
     );
   }
 
-  const filteredConvos = convos.filter((c) => c.title.toLowerCase().includes(query.toLowerCase()));
+  const unreadChats = convos.filter((c) => c.unread > 0).length;
+  const filteredConvos = convos.filter(
+    (c) => c.title.toLowerCase().includes(query.toLowerCase()) && (listFilter === "all" || c.unread > 0),
+  );
 
   return (
     <>
@@ -395,12 +402,13 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
       <div className="flex h-full">
         {/* ===================== Conversation list ===================== */}
         <div className={`flex h-full w-full shrink-0 flex-col border-r border-[var(--color-line)] bg-white md:w-[340px] ${showThread ? "hidden md:flex" : "flex"}`}>
-          <div className="border-b border-[var(--color-line)] px-4 py-3.5">
+          <div className="border-b border-[var(--color-line)] px-4 pb-3 pt-4">
             <div className="flex items-center justify-between">
-              <h1 className="text-xl font-extrabold tracking-tight text-[var(--color-navy)]">Messages</h1>
+              <h1 className="text-[22px] font-extrabold leading-tight tracking-tight text-[var(--color-ink)]">Messages</h1>
               <button
                 onClick={() => setPicker(true)}
                 title="New chat"
+                aria-label="New chat"
                 className="grid size-9 place-items-center rounded-full text-[var(--color-brand-strong)] transition hover:bg-[var(--color-brand-tint)]"
               >
                 <PenSquare className="h-5 w-5" />
@@ -412,8 +420,31 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search chats"
+                aria-label="Search chats"
                 className="h-10 w-full rounded-full border border-[var(--color-line)] bg-[var(--color-surface-2)] pl-10 pr-4 text-sm outline-none transition focus:border-[var(--color-brand)] focus:bg-white"
               />
+            </div>
+            {/* WhatsApp-style filter chips */}
+            <div className="mt-3 flex gap-2">
+              {(["all", "unread"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setListFilter(f)}
+                  aria-pressed={listFilter === f}
+                  className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[13.5px] font-semibold transition ${
+                    listFilter === f
+                      ? "bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)]"
+                      : "bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-ink)]"
+                  }`}
+                >
+                  {f === "all" ? "All" : "Unread"}
+                  {f === "unread" && unreadChats > 0 && (
+                    <span className="grid h-4 min-w-4 place-items-center rounded-full bg-[var(--color-brand)] px-1 text-[10px] font-bold text-white">
+                      {unreadChats}
+                    </span>
+                  )}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -421,28 +452,41 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
             {/* Valiant AI pinned */}
             <button
               onClick={() => window.dispatchEvent(new Event("valiant-ai:open"))}
-              className="flex w-full items-center gap-3 border-b border-[var(--color-line)] bg-[var(--color-brand-tint)]/40 px-3 py-3 text-left transition hover:bg-[var(--color-brand-tint)]"
+              className="flex w-full items-center gap-3 px-3 py-3 text-left transition hover:bg-[var(--color-surface-2)]"
             >
-              <span className="grid size-12 shrink-0 place-items-center rounded-full gradient-brand text-white">
-                <Sparkles className="h-6 w-6" />
+              {/* the orb wears the Valiant story ring */}
+              <span className="story-ring grid size-12 shrink-0 place-items-center rounded-full p-[2px]">
+                <span className="grid size-full place-items-center rounded-full gradient-brand text-white ring-2 ring-white">
+                  <Sparkles className="h-5 w-5" />
+                </span>
               </span>
               <div className="min-w-0 flex-1">
-                <div className="text-[15px] font-bold text-[var(--color-ink)]">Valiant AI</div>
-                <div className="truncate text-[13px] text-[var(--color-muted)]">Ask me anything · voice &amp; text</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[15px] font-semibold text-[var(--color-ink)]">Valiant AI</span>
+                  <BadgeCheck className="h-4 w-4 text-[var(--color-brand)]" aria-label="Official" />
+                </div>
+                <div className="truncate text-[13px] text-[var(--color-muted)]">Ask about dues, your ward, the movement…</div>
               </div>
+              <Pin className="h-4 w-4 shrink-0 rotate-45 text-[var(--color-faint)]" aria-label="Pinned" />
             </button>
 
             {filteredConvos.length === 0 && (
-              <div className="px-4 py-10 text-center">
-                <MessageSquarePlus className="mx-auto mb-2 h-8 w-8 text-[var(--color-faint)]" />
-                <p className="text-sm text-[var(--color-muted)]">No conversations yet.</p>
-                <button
-                  onClick={() => setPicker(true)}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-full gradient-brand px-4 py-2 text-sm font-bold text-white"
-                >
-                  <Plus className="h-4 w-4" /> Start a chat
-                </button>
-              </div>
+              <ValiantEmpty
+                className="py-12"
+                icon={<MessageSquarePlus className="h-7 w-7" />}
+                title={query ? "No chats match" : "Start a conversation"}
+                text={query ? "Try another name." : "Message any verified member of the movement."}
+                action={
+                  !query && (
+                    <button
+                      onClick={() => setPicker(true)}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-[var(--color-brand)] px-4 py-2 text-sm font-bold text-white"
+                    >
+                      <Plus className="h-4 w-4" /> Start a chat
+                    </button>
+                  )
+                }
+              />
             )}
 
             {filteredConvos.map((c) => (
@@ -480,18 +524,24 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
                 </div>
               </button>
             ))}
+
+            {filteredConvos.length > 0 && (
+              <p className="flex items-center justify-center gap-1.5 px-6 py-6 text-center text-[12px] text-[var(--color-faint)]">
+                <ShieldCheck className="h-3.5 w-3.5 text-[var(--color-green)]" /> Only NIN-verified members can message you
+              </p>
+            )}
           </div>
         </div>
 
         {/* ============================ Thread ============================ */}
         <div
           className={`relative h-full min-w-0 flex-1 flex-col ${showThread ? "flex" : "hidden md:flex"}`}
-          style={{ backgroundColor: "#f3ede4" }}
+          style={{ backgroundColor: "var(--color-bg)" }}
         >
           {!active ? (
             <div className="grid h-full place-items-center text-center">
               <div>
-                <div className="mx-auto mb-3 grid size-16 place-items-center rounded-full bg-white/70 text-[var(--color-brand-strong)] shadow-sm">
+                <div className="mx-auto mb-3 grid size-16 place-items-center rounded-full bg-[var(--color-brand-tint)] text-[var(--color-brand-strong)] shadow-sm">
                   <Sparkles className="h-8 w-8" />
                 </div>
                 <p className="text-sm font-medium text-[var(--color-muted)]">Select a chat or start a new one</p>
@@ -499,7 +549,7 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
             </div>
           ) : (
             <>
-              <div className="pointer-events-none absolute inset-0 opacity-[0.04]" style={{ backgroundImage: "radial-gradient(var(--color-ink) 1px, transparent 1px)", backgroundSize: "18px 18px" }} />
+              <div className="chat-wall pointer-events-none absolute inset-0" />
 
               {/* header */}
               <header className="relative z-10 flex items-center gap-3 border-b border-[var(--color-line)] bg-white px-4 py-2.5">
@@ -575,7 +625,12 @@ export function LiveChat({ active: isTabActive = true }: { active?: boolean } = 
                     {isGroup ? "Every member of this group is NIN-verified" : "Messages are between verified members"}
                   </div>
                   {messages.length === 0 && (
-                    <p className="py-10 text-center text-sm text-[var(--color-muted)]">No messages yet — say hello 👋</p>
+                    <ChatWelcome
+                      title={isGroup ? `Welcome to ${active.title}` : `Say hello to ${active.title.split(/\s+/)[0]}`}
+                      text="Break the ice. Every chat here is between verified members of the movement."
+                      replies={["👋 Hi there!", "🦅 Courage to lead!", "🤝 Great to connect"]}
+                      onSend={(r) => sendPayload(r)}
+                    />
                   )}
                   {messages.map((m, i) => {
                     if (m.media?.kind === "system") {

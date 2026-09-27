@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Megaphone, ImagePlus, Loader2, X, MapPin, Send } from "lucide-react";
 import { getMyActivities, postCoordinatorActivity } from "@/app/actions/activities";
 import type { ActivityDTO } from "@/lib/activities-db";
+import { ValiantEmpty, ValiantLoader } from "@/components/ui/valiant";
 
 function readImage(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -112,11 +113,13 @@ export function ActivityDashboard() {
       {/* Log */}
       <div className="max-h-[28rem] divide-y divide-[var(--color-line-soft)] overflow-y-auto">
         {items === null ? (
-          <div className="grid place-items-center py-12"><Loader2 className="h-5 w-5 animate-spin text-[var(--color-brand)]" /></div>
+          <div className="grid place-items-center py-12"><ValiantLoader /></div>
         ) : items.length === 0 ? (
-          <div className="px-4 py-12 text-center text-[13px] text-[var(--color-muted)]">
-            No activities logged yet. Your first one will appear here and in the members&apos; feed.
-          </div>
+          <ValiantEmpty
+            className="py-10"
+            title="Lead from the front"
+            text="Log what you did today. It appears here and in your members' feed."
+          />
         ) : (
           items.map((a) => (
             <div key={a.id} className="p-4">

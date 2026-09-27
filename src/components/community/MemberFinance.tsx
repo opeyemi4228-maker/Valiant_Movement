@@ -7,7 +7,6 @@ import {
   HeartHandshake,
   CalendarCheck,
   ShieldCheck,
-  ArrowRight,
   CheckCircle2,
   Clock,
   XCircle,
@@ -42,6 +41,7 @@ import {
 import type { PayoutAccountDTO } from "@/lib/wallet-db";
 import type { PaymentDTO } from "@/lib/wallet-db";
 import { fmtNaira, type PaymentKind } from "@/lib/wallet-types";
+import { ValiantEmpty, ValiantLoader } from "@/components/ui/valiant";
 
 const TYPE_META: Record<PaymentKind, { icon: typeof Wallet; color: string; label: string; sign: "in" | "out" }> = {
   deposit: { icon: ArrowDownLeft, color: "var(--color-green)", label: "Deposit", sign: "in" },
@@ -185,7 +185,10 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
         {/* ============================== Wallet ============================== */}
         <div className="relative overflow-hidden rounded-3xl gradient-brand p-6 text-white shadow-sm">
           <div className="absolute -right-8 -top-10 size-44 rounded-full bg-white/10" />
-          <div className="absolute -bottom-14 right-20 size-36 rounded-full bg-white/10" />
+          {/* the eagle watermark — the wallet belongs to the movement */}
+          <span aria-hidden className="pointer-events-none absolute -bottom-7 right-3 -rotate-12 select-none text-[120px] leading-none opacity-[0.16]">
+            🦅
+          </span>
           <div className="relative">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm font-semibold text-white/90">
@@ -359,13 +362,15 @@ export function MemberFinance({ name, active = true }: { name: string; active?: 
           <div className="divide-y divide-[var(--color-line-soft)]">
             {!loaded ? (
               <div className="grid place-items-center py-14 text-sm text-[var(--color-faint)]">
-                <Loader2 className="h-5 w-5 animate-spin" />
+                <ValiantLoader />
               </div>
             ) : summary!.payments.length === 0 ? (
-              <div className="grid place-items-center px-6 py-14 text-center">
-                <ArrowRight className="mb-2 h-6 w-6 text-[var(--color-faint)]" />
-                <p className="text-sm text-[var(--color-muted)]">No transactions yet — your first deposit will show up here.</p>
-              </div>
+              <ValiantEmpty
+                className="py-12"
+                icon={<Wallet className="h-7 w-7" />}
+                title="No transactions yet"
+                text="Your first deposit will show up here. Every naira is on the ledger."
+              />
             ) : (
               summary!.payments.map((t) => <TxRow key={t.id} t={t} />)
             )}

@@ -16,6 +16,7 @@ import {
 import { getAdminMembers, exportAdminMembersCsv, setCommunityMemberRole, type AdminMemberRow } from "@/app/actions/admin";
 import type { AdminScope } from "@/data/admin-roles";
 import { ReferralLeaderboard } from "./ReferralLeaderboard";
+import { ValiantLoader } from "@/components/ui/valiant";
 
 const PAGE_SIZE = 8;
 
@@ -199,7 +200,7 @@ export function MembersDatabase({
   if (state === "loading") {
     return (
       <div className="grid h-64 place-items-center">
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+        <ValiantLoader />
       </div>
     );
   }

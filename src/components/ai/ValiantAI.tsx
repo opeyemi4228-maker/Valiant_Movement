@@ -196,7 +196,7 @@ export function ValiantAI({ onClose, wakeGreeting = false }: { onClose: () => vo
               className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-[14px] leading-relaxed shadow-sm ${
                 m.role === "user"
                   ? "rounded-br-md bg-[var(--color-brand-tint)] text-[var(--color-ink)]"
-                  : "rounded-bl-md bg-white text-[var(--color-ink-soft)]"
+                  : "rounded-bl-md bg-[var(--color-line-soft)] text-[var(--color-ink-soft)]"
               }`}
             >
               {m.image && <img src={m.image} alt="" className="mb-1.5 max-h-52 rounded-xl object-cover" />}
@@ -221,7 +221,7 @@ export function ValiantAI({ onClose, wakeGreeting = false }: { onClose: () => vo
             <span className="mr-2 grid size-7 shrink-0 place-items-center self-end rounded-full gradient-brand text-white">
               <Sparkles className="h-3.5 w-3.5" />
             </span>
-            <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-white px-4 py-3 shadow-sm">
+            <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-[var(--color-line-soft)] px-4 py-3">
               {[0, 1, 2].map((i) => (
                 <span key={i} className="size-2 animate-bounce rounded-full bg-[var(--color-faint)]" style={{ animationDelay: `${i * 120}ms` }} />
               ))}

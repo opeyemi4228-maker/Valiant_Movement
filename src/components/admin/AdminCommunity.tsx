@@ -22,7 +22,6 @@ import {
   ArrowUpRight,
   Activity,
   ShieldCheck,
-  Loader2,
   ChevronRight,
   X,
 } from "lucide-react";
@@ -39,6 +38,7 @@ import type { CommunityDTO, CommunityMemberDTO } from "@/lib/communities";
 import type { FeedPost } from "@/lib/feed-types";
 import type { AdminRole } from "@/data/admin-roles";
 import { Avatar } from "@/components/community/Avatar";
+import { ValiantLoader } from "@/components/ui/valiant";
 
 function fmt(n: number) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
@@ -424,7 +424,7 @@ function NationalCommunitiesTable() {
   if (state === "loading") {
     return (
       <div className="grid h-48 place-items-center">
-        <Loader2 className="h-5 w-5 animate-spin text-[var(--color-brand)]" />
+        <ValiantLoader />
       </div>
     );
   }
@@ -540,7 +540,7 @@ function NationalCommunityRoster({ community, onClose }: { community: CommunityD
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
           {!members ? (
             <div className="grid place-items-center py-10">
-              <Loader2 className="h-5 w-5 animate-spin text-[var(--color-brand)]" />
+              <ValiantLoader />
             </div>
           ) : members.length === 0 ? (
             <p className="py-10 text-center text-sm text-[var(--color-muted)]">No members yet.</p>

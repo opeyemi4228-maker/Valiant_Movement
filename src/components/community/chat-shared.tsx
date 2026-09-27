@@ -234,7 +234,7 @@ export function CallEventRow({
         onClick={onCallBack}
         title="Call back"
         className={`flex items-center gap-2.5 rounded-2xl px-3 py-2 text-left shadow-sm transition hover:brightness-95 ${
-          mine ? "rounded-br-md bg-[var(--color-brand-tint)]" : "rounded-bl-md bg-white"
+          mine ? "rounded-br-md bg-[var(--color-brand-tint)]" : "rounded-bl-md bg-[var(--color-line-soft)]"
         }`}
       >
         <span
@@ -487,4 +487,46 @@ export function useThreadMode(tab: ThreadDetail["tab"], open: boolean, close: ()
       window.dispatchEvent(new CustomEvent<ThreadDetail>("valiant:thread", { detail: { tab, open: false } }));
     };
   }, [tab]);
+}
+
+/* ------------------------------ Chat welcome ------------------------------ */
+
+/**
+ * Shown in an empty conversation: a Valiant welcome plus one-tap icebreakers,
+ * so the first message is never a blank-page problem. Tapping a chip sends it.
+ */
+export function ChatWelcome({
+  title,
+  text,
+  replies,
+  onSend,
+}: {
+  title: string;
+  text: string;
+  replies: string[];
+  onSend: (body: string) => Promise<{ ok: boolean }> | void;
+}) {
+  const [sent, setSent] = useState(false);
+  return (
+    <div className="animate-pop mx-auto my-6 w-full max-w-sm rounded-3xl bg-white/95 p-5 text-center shadow-sm ring-1 ring-[var(--color-line)]">
+      <div className="mx-auto mb-3 grid size-14 place-items-center rounded-full bg-[var(--color-brand-tint)] text-3xl">🦅</div>
+      <h3 className="text-[16px] font-bold text-[var(--color-ink)]">{title}</h3>
+      <p className="mt-1 text-[13.5px] leading-snug text-[var(--color-muted)]">{text}</p>
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        {replies.map((r) => (
+          <button
+            key={r}
+            disabled={sent}
+            onClick={() => {
+              setSent(true);
+              void onSend(r);
+            }}
+            className="rounded-full border border-[var(--color-brand)]/30 bg-[var(--color-brand-tint)] px-3.5 py-2 text-[13.5px] font-semibold text-[var(--color-brand-strong)] transition hover:bg-[var(--color-brand)] hover:text-white active:scale-95 disabled:opacity-50"
+          >
+            {r}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }

@@ -8,10 +8,10 @@ import {
   Repeat2,
   Share2,
   ImageIcon,
-  Globe2,
   Radio,
   Send,
   BadgeCheck,
+  Check,
   X,
   Sparkles,
   Plus,
@@ -23,7 +23,6 @@ import {
   CalendarDays,
   ChevronRight,
   Bookmark,
-  MoreHorizontal,
   Smile,
   Pin,
 } from "lucide-react";
@@ -57,6 +56,16 @@ const QUICK: { label: string; template: string }[] = [
   { label: "💬 Ask the movement", template: "💬 Question for the movement: " },
 ];
 
+/** Composer prompts, rotated while the box is empty — the movement's voice,
+ *  not a generic "What's happening?". `{name}` is the member's first name. */
+const PROMPTS = [
+  "What's happening in your ward, {name}?",
+  "What did you do for the movement today?",
+  "Share a win from your community 🎉",
+  "Who deserves a shout-out today?",
+  "Courage to lead: what's on your mind?",
+];
+
 /* --------------------------------- Feed --------------------------------- */
 
 export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: string }; active?: boolean }) {
@@ -67,6 +76,9 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
   const [posting, setPosting] = useState(false);
   const [story, setStory] = useState<number | null>(null);
   const [showEmoji, setShowEmoji] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [promptIdx, setPromptIdx] = useState(0);
+  const [celebrate, setCelebrate] = useState(false);
   const [myStory, setMyStory] = useState<{ media: string; caption: string } | null>(null); // demo fallback
   const [dbStories, setDbStories] = useState<StoryDTO[]>([]);
   const [dispatches, setDispatches] = useState<ActivityDTO[]>([]);
@@ -79,6 +91,13 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const scrollTopRef = useRef<HTMLDivElement>(null);
   const firstName = me.name.split(/\s+/)[0];
+
+  // Rotate the composer prompt every few seconds while it's idle and visible.
+  useEffect(() => {
+    if (!active || composing || draft) return;
+    const t = setInterval(() => setPromptIdx((i) => (i + 1) % PROMPTS.length), 4500);
+    return () => clearInterval(t);
+  }, [active, composing, draft]);
 
   // Stories: real 24-hour member statuses (from the DB) lead; the showcase
   // rail fills in behind them. Your own story (if live) is always first.
@@ -193,6 +212,8 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
     if (res.ok) {
       setDraft("");
       setImage(null);
+      setCelebrate(true);
+      setTimeout(() => setCelebrate(false), 2400);
       await refresh(); // the persisted post comes straight back from the DB
     }
     setPosting(false);
@@ -264,11 +285,18 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
 
   return (
     <div className="no-scrollbar pb-fab h-full overflow-y-auto">
+      {celebrate && (
+        <div className="pointer-events-none fixed inset-x-0 top-[calc(env(safe-area-inset-top)+4.25rem)] z-[60] flex justify-center lg:top-6" role="status">
+          <span className="animate-rise flex items-center gap-2 rounded-full bg-[var(--color-ink)] px-4 py-2.5 text-[14px] font-bold text-white shadow-xl">
+            <span className="animate-support text-lg">🦅</span> Posted to the movement
+          </span>
+        </div>
+      )}
       {/* Focused single-post view — just this post and its conversation */}
       {focusPost && (
         <div className="fixed inset-0 z-[55] flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:p-6">
           <div className="absolute inset-0" onClick={() => setFocusId(null)} />
-          <div className="relative my-auto w-full max-w-[640px]">
+          <div className="relative my-auto w-full max-w-[640px] [&_article]:rounded-2xl [&_article]:border-b-0">
             <button
               onClick={() => setFocusId(null)}
               aria-label="Close post"
@@ -305,129 +333,116 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
       )}
       <input ref={storyFileRef} type="file" accept="image/*" hidden onChange={onPickStory} />
 
-      <div className="flex w-full gap-6 px-3 py-4 sm:px-5 lg:px-6 xl:gap-8 xl:px-8">
+      <div className="flex w-full justify-center gap-8 lg:px-6 xl:px-8">
         {/* ============================ Center feed ============================ */}
-        <div className="mx-auto w-full min-w-0 max-w-[680px] flex-1 xl:mx-0 xl:max-w-none">
-          {/* Clean bold masthead — a simple orange block, no busy texture. */}
-          <div className="relative mb-4 overflow-hidden rounded-3xl gradient-brand px-5 py-6 text-white shadow-sm sm:px-7">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-extrabold uppercase tracking-[0.24em] text-white/85">
-                The Movement
-              </span>
-              <span className="flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-[11px] font-bold text-white">
-                <span className="size-1.5 animate-pulse rounded-full bg-white" /> Live
-              </span>
-            </div>
-
-            <h1 className="mt-3 text-[26px] font-extrabold leading-[1.05] tracking-tight sm:text-[30px]">
-              Good to see you, {firstName}.
-            </h1>
-            <p className="relative mt-2.5 max-w-md text-[13.5px] font-medium leading-relaxed text-white/85">
-              What the movement is doing right now, across your ward and the federation.
-            </p>
-
-            {/* live stats from the real feed */}
-            <div className="relative mt-4 flex flex-wrap items-center gap-2">
-              <span className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12px] font-bold ring-1 ring-white/20 backdrop-blur">
-                <TrendingUp className="h-3.5 w-3.5" /> {fmt(posts.length)} post{posts.length === 1 ? "" : "s"} live
-              </span>
-              <span className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12px] font-bold ring-1 ring-white/20 backdrop-blur">
-                <Users className="h-3.5 w-3.5" /> {fmt(new Set(posts.map((p) => p.authorId)).size)} voices
-              </span>
-              <span className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-[12px] font-bold ring-1 ring-white/20 backdrop-blur">
-                <MapPin className="h-3.5 w-3.5" /> Nationwide
-              </span>
-            </div>
+        {/* One continuous column (X / WhatsApp simplicity): stories, composer
+            and posts are rows separated by hairlines — no banner, no boxes. */}
+        <div className="w-full min-w-0 max-w-[640px] flex-1 bg-white sm:border-x sm:border-[var(--color-line)]">
+          {/* Stories */}
+          <div className="border-b border-[var(--color-line)] px-3 py-3">
+            <Stories
+              me={me}
+              hasMyStory={hasMyStory}
+              onView={setStory}
+              onCreate={() => storyFileRef.current?.click()}
+            />
           </div>
 
-          {/* Stories */}
-          <Stories
-            me={me}
-            hasMyStory={hasMyStory}
-            onView={setStory}
-            onCreate={() => storyFileRef.current?.click()}
-          />
-
-          {/* Composer */}
-          <div className="mt-3 rounded-2xl border border-[var(--color-line)] bg-white p-3.5">
-            <div className="flex gap-3">
-              <Avatar name={me.name} color="#e07400" photo={me.avatar} size={42} />
-              <div className="min-w-0 flex-1">
-                <textarea
-                  ref={composerRef}
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder={`Share something with the movement, ${firstName}…`}
-                  rows={draft || image ? 3 : 1}
-                  className="w-full resize-none bg-transparent pt-2 text-[15px] text-[var(--color-ink)] outline-none placeholder:text-[var(--color-faint)]"
-                />
-                {image && (
-                  <div className="relative mt-2 w-fit">
-                    <img src={image} alt="" className="max-h-52 rounded-xl border border-[var(--color-line)]" />
-                    <button
-                      onClick={() => setImage(null)}
-                      className="absolute right-2 top-2 grid size-7 place-items-center rounded-full bg-black/60 text-white"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
-                {!draft && !image && (
-                  <div className="no-scrollbar -mx-1 mt-1 flex gap-2 overflow-x-auto px-1 pb-1">
-                    {QUICK.map((q) => (
-                      <button
-                        key={q.label}
-                        onClick={() => {
-                          setDraft(q.template);
-                          requestAnimationFrame(() => composerRef.current?.focus());
-                        }}
-                        className="shrink-0 rounded-full border border-[var(--color-brand)]/25 bg-[var(--color-brand-tint)] px-3 py-1.5 text-[12px] font-bold text-[var(--color-brand-strong)] transition hover:bg-[var(--color-brand)] hover:text-white"
-                      >
-                        {q.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="mt-2 flex items-center justify-between border-t border-[var(--color-line-soft)] pt-2.5">
-                  <div className="relative flex items-center gap-1">
-                    <button
-                      onClick={() => fileRef.current?.click()}
-                      className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-sm font-medium text-[var(--color-brand-strong)] transition hover:bg-[var(--color-brand-tint)]"
-                    >
-                      <ImageIcon className="h-[18px] w-[18px]" /> Photo
-                    </button>
-                    <button
-                      onClick={() => setShowEmoji((v) => !v)}
-                      className={`grid size-8 place-items-center rounded-lg transition hover:bg-[var(--color-surface-2)] hover:text-[var(--color-brand-strong)] ${showEmoji ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"}`}
-                      title="Add emoji"
-                    >
-                      <Smile className="h-[18px] w-[18px]" />
-                    </button>
-                    {showEmoji && (
-                      <EmojiPicker
-                        onPick={(e) => setDraft((d) => d + e)}
-                        onClose={() => setShowEmoji(false)}
-                      />
-                    )}
-                  </div>
-                  <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickImage} />
+          {/* Composer — a single quiet row until you start writing */}
+          <div className="flex gap-3 border-b border-[var(--color-line)] px-4 py-3">
+            <Avatar name={me.name} color="#e07400" photo={me.avatar} size={40} />
+            <div className="min-w-0 flex-1">
+              <div className="relative">
+              {!draft && (
+                <span
+                  key={promptIdx}
+                  aria-hidden
+                  className="animate-fade pointer-events-none absolute inset-x-0 top-2 truncate text-[16px] leading-snug text-[var(--color-faint)]"
+                >
+                  {PROMPTS[promptIdx].replace("{name}", firstName)}
+                </span>
+              )}
+              <textarea
+                ref={composerRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onFocus={() => setComposing(true)}
+                onBlur={() => setComposing(false)}
+                aria-label="Write a post"
+                rows={draft || image ? 3 : 1}
+                className="relative w-full resize-none bg-transparent pt-2 text-[16px] leading-snug text-[var(--color-ink)] outline-none"
+              />
+              </div>
+              {image && (
+                <div className="relative mt-2 w-fit">
+                  <img src={image} alt="" className="max-h-52 rounded-2xl border border-[var(--color-line)]" />
                   <button
-                    type="button"
-                    onClick={onPublish}
-                    disabled={(!draft.trim() && !image) || posting}
-                    className="rounded-full gradient-brand px-5 py-2 text-sm font-bold text-white shadow-sm transition-opacity enabled:hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={() => setImage(null)}
+                    aria-label="Remove photo"
+                    className="absolute right-2 top-2 grid size-7 place-items-center rounded-full bg-black/60 text-white"
                   >
-                    {posting ? "Posting…" : "Post"}
+                    <X className="h-4 w-4" />
                   </button>
                 </div>
+              )}
+              {/* Prompt ideas appear only while the empty composer is focused */}
+              {composing && !draft && !image && (
+                <div className="no-scrollbar -mx-1 mt-1 flex gap-2 overflow-x-auto px-1 pb-1">
+                  {QUICK.map((q) => (
+                    <button
+                      key={q.label}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setDraft(q.template);
+                        requestAnimationFrame(() => composerRef.current?.focus());
+                      }}
+                      className="shrink-0 rounded-full border border-[var(--color-line)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--color-ink-soft)] transition hover:border-[var(--color-brand)] hover:text-[var(--color-brand-strong)]"
+                    >
+                      {q.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="mt-1.5 flex items-center justify-between">
+                <div className="relative -ml-2 flex items-center">
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    aria-label="Add photo"
+                    className="grid size-9 place-items-center rounded-full text-[var(--color-brand-strong)] transition hover:bg-[var(--color-brand-tint)]"
+                  >
+                    <ImageIcon className="h-5 w-5" />
+                  </button>
+                  <button
+                    onClick={() => setShowEmoji((v) => !v)}
+                    aria-label="Add emoji"
+                    className="grid size-9 place-items-center rounded-full text-[var(--color-brand-strong)] transition hover:bg-[var(--color-brand-tint)]"
+                  >
+                    <Smile className="h-5 w-5" />
+                  </button>
+                  {showEmoji && (
+                    <EmojiPicker
+                      onPick={(e) => setDraft((d) => d + e)}
+                      onClose={() => setShowEmoji(false)}
+                    />
+                  )}
+                </div>
+                <input ref={fileRef} type="file" accept="image/*" hidden onChange={pickImage} />
+                <button
+                  type="button"
+                  onClick={onPublish}
+                  disabled={(!draft.trim() && !image) || posting}
+                  className="rounded-full bg-[var(--color-brand)] px-5 py-2 text-[14px] font-bold text-white transition enabled:hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {posting ? "Posting…" : "Post"}
+                </button>
               </div>
             </div>
           </div>
 
           {/* Posts */}
-          <div ref={scrollTopRef} className="mt-3 space-y-3 pb-10">
+          <div ref={scrollTopRef}>
             {activeTag && (
-              <div className="flex items-center justify-between rounded-2xl border border-[var(--color-line)] bg-white px-4 py-2.5">
+              <div className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-2.5">
                 <div className="flex items-center gap-2 text-sm">
                   <TrendingUp className="h-4 w-4 text-[var(--color-brand-strong)]" />
                   <span className="font-bold text-[var(--color-brand-strong)]">{activeTag}</span>
@@ -441,40 +456,21 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
                 </button>
               </div>
             )}
-            {!activeTag && dispatches.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-1.5 px-1 text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--color-brand-strong)]">
-                  <Megaphone className="h-3.5 w-3.5" /> From your coordinators
-                </div>
-                {dispatches.map((a) => (
-                  <DispatchCard key={a.id} a={a} />
-                ))}
-              </div>
-            )}
-            {!loaded && (
-              <>
-                {[0, 1, 2].map((i) => (
-                  <div key={i} className="animate-pulse rounded-2xl border border-[var(--color-line)] bg-white p-4">
-                    <div className="flex items-start gap-3">
-                      <span className="size-11 shrink-0 rounded-full bg-[var(--color-surface-2)]" />
-                      <div className="min-w-0 flex-1 space-y-2.5 pt-1">
-                        <div className="h-3.5 w-40 rounded-full bg-[var(--color-surface-2)]" />
-                        <div className="h-3 w-full rounded-full bg-[var(--color-surface-2)]" />
-                        <div className="h-3 w-4/5 rounded-full bg-[var(--color-surface-2)]" />
-                        {i === 1 && <div className="h-40 w-full rounded-xl bg-[var(--color-surface-2)]" />}
-                        <div className="flex gap-6 pt-1">
-                          <div className="h-3 w-10 rounded-full bg-[var(--color-surface-2)]" />
-                          <div className="h-3 w-10 rounded-full bg-[var(--color-surface-2)]" />
-                          <div className="h-3 w-10 rounded-full bg-[var(--color-surface-2)]" />
-                        </div>
-                      </div>
-                    </div>
+            {!activeTag && dispatches.map((a) => <DispatchCard key={a.id} a={a} />)}
+            {!loaded &&
+              [0, 1, 2].map((i) => (
+                <div key={i} className="flex animate-pulse gap-3 border-b border-[var(--color-line)] px-4 py-4" aria-hidden>
+                  <span className="size-10 shrink-0 rounded-full bg-[var(--color-surface-2)]" />
+                  <div className="min-w-0 flex-1 space-y-2.5 pt-1">
+                    <div className="h-3.5 w-40 rounded-full bg-[var(--color-surface-2)]" />
+                    <div className="h-3 w-full rounded-full bg-[var(--color-surface-2)]" />
+                    <div className="h-3 w-4/5 rounded-full bg-[var(--color-surface-2)]" />
+                    {i === 1 && <div className="h-40 w-full rounded-2xl bg-[var(--color-surface-2)]" />}
                   </div>
-                ))}
-              </>
-            )}
+                </div>
+              ))}
             {loaded && visiblePosts.length === 0 && (
-              <div className="grid place-items-center rounded-2xl border border-dashed border-[var(--color-line)] bg-white py-14 text-center">
+              <div className="grid place-items-center px-6 py-16 text-center">
                 <Sparkles className="mb-2 h-7 w-7 text-[var(--color-faint)]" />
                 <p className="text-sm text-[var(--color-muted)]">
                   {activeTag ? `No posts yet under ${activeTag}.` : "Be the first to post to the movement."}
@@ -486,7 +482,7 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
                       setActiveTag(null);
                       requestAnimationFrame(() => composerRef.current?.focus());
                     }}
-                    className="mt-3 rounded-full gradient-brand px-4 py-2 text-sm font-bold text-white"
+                    className="mt-3 rounded-full bg-[var(--color-brand)] px-4 py-2 text-sm font-bold text-white"
                   >
                     Post about {activeTag}
                   </button>
@@ -501,22 +497,26 @@ export function LiveFeed({ me, active = true }: { me: { name: string; avatar?: s
                   if ((e.target as HTMLElement).closest("button, a, textarea, input")) return;
                   setFocusId(post.id);
                 }}
-                className="cursor-pointer"
+                className="cursor-pointer [&>article]:transition-colors [&>article:hover]:bg-[var(--color-surface-2)]"
               >
                 <PostCard post={post} me={me} onLike={onLike} onRepost={onRepost} onComment={onComment} onBookmark={onBookmark} />
               </div>
             ))}
             {loaded && visiblePosts.length > 0 && (
-              <div className="grid place-items-center py-6 text-sm text-[var(--color-faint)]">
-                You&apos;re all caught up 🦅
+              <div className="px-6 pb-4 pt-10 text-center">
+                <div className="text-3xl">🦅</div>
+                <p className="mt-2 text-[15px] font-bold text-[var(--color-ink)]">You&apos;re all caught up</p>
+                <p className="mt-1 text-[10.5px] font-bold uppercase tracking-[0.24em] text-[var(--color-brand-strong)]">
+                  Courage · Character · Service
+                </p>
               </div>
             )}
           </div>
         </div>
 
         {/* ============================ Right rail ============================ */}
-        <aside className="hidden shrink-0 xl:block xl:w-[320px] 2xl:w-[360px]">
-          <div className="sticky top-0 space-y-4 pb-10">
+        <aside className="hidden shrink-0 py-4 xl:block xl:w-[320px] 2xl:w-[340px]">
+          <div className="sticky top-4 space-y-4 pb-10">
             <LiveNow />
             <Trending onPick={pickTag} active={activeTag} />
             <WhoToFollow />
@@ -585,7 +585,7 @@ function Stories({
             className="size-16"
           >
             {hasMyStory ? (
-              <span className="block rounded-full bg-gradient-to-tr from-[var(--color-brand)] via-[#f25fb0] to-[var(--color-amber)] p-[2.5px]">
+              <span className="block rounded-full story-ring p-[2.5px]">
                 <span className="block rounded-full bg-white p-[2px]">
                   <Avatar name={me.name} color="#e07400" photo={me.avatar} size={52} />
                 </span>
@@ -609,7 +609,7 @@ function Stories({
 
       {STORY_PEOPLE.map((p, i) => (
         <button key={p.id} onClick={() => onView(offset + i)} className="flex w-16 shrink-0 flex-col items-center gap-1.5">
-          <span className="rounded-full bg-gradient-to-tr from-[var(--color-brand)] via-[#f25fb0] to-[var(--color-amber)] p-[2.5px]">
+          <span className="rounded-full story-ring p-[2.5px]">
             <span className="block rounded-full bg-white p-[2px]">
               <Avatar person={p} size={52} />
             </span>
@@ -636,28 +636,24 @@ const DISPATCH_TINT: Record<string, string> = {
 function DispatchCard({ a }: { a: ActivityDTO }) {
   const tint = DISPATCH_TINT[a.level] ?? "var(--color-brand-strong)";
   return (
-    <article
-      className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white shadow-sm"
-      style={{ borderLeft: `3px solid ${tint}` }}
-    >
-      <div className="p-4">
-        <div className="flex items-center gap-2.5">
-          <span className="grid size-9 shrink-0 place-items-center rounded-full text-white" style={{ backgroundColor: tint }}>
-            <Megaphone className="h-4 w-4" />
+    <article className="flex gap-3 border-b border-[var(--color-line)] bg-white px-4 py-3">
+      <span className="grid size-10 shrink-0 place-items-center rounded-full text-white" style={{ backgroundColor: tint }}>
+        <Megaphone className="h-[18px] w-[18px]" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5 text-[15px] leading-5">
+          <span className="truncate font-bold text-[var(--color-ink)]">{a.authorTitle}</span>
+          <span className="shrink-0 rounded-full bg-[var(--color-brand-tint)] px-1.5 py-px text-[10px] font-bold uppercase tracking-wide text-[var(--color-brand-strong)]">
+            Coordinator
           </span>
-          <div className="min-w-0 flex-1 leading-tight">
-            <div className="truncate text-sm font-bold text-[var(--color-ink)]">{a.authorTitle}</div>
-            <div className="flex items-center gap-1 truncate text-[11px] text-[var(--color-faint)]">
-              <MapPin className="h-3 w-3 shrink-0" /> {a.jurisdiction} · {timeAgo(a.createdAt)}
-            </div>
-          </div>
-          <span className="shrink-0 rounded-full bg-[var(--color-brand-tint)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--color-brand-strong)]">
-            Dispatch
-          </span>
+          <span className="shrink-0 text-[14px] text-[var(--color-faint)]">· {timeAgo(a.createdAt)}</span>
         </div>
-        <p className="mt-2.5 text-sm leading-relaxed text-[var(--color-ink-soft)]">{a.body}</p>
+        <div className="flex items-center gap-1 truncate text-[12.5px] text-[var(--color-muted)]">
+          <MapPin className="h-3 w-3 shrink-0" /> {a.jurisdiction}
+        </div>
+        <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-[1.45] text-[var(--color-ink)]">{a.body.trim()}</p>
         {a.image && (
-          <img src={a.image} alt="" className="mt-2.5 max-h-72 w-full rounded-xl border border-[var(--color-line)] object-cover" />
+          <img src={a.image} alt="" className="mt-2.5 max-h-80 w-full rounded-2xl border border-[var(--color-line)] object-cover" />
         )}
       </div>
     </article>
@@ -771,7 +767,6 @@ function StoryViewer({ stories, start, onClose }: { stories: Story[]; start: num
 
 export function PostCard({
   post,
-  me,
   onLike,
   onRepost,
   onComment,
@@ -792,6 +787,14 @@ export function PostCard({
   const [burst, setBurst] = useState(false);
   const [showEmoji, setShowEmoji] = useState(false);
   const [showLikers, setShowLikers] = useState(false);
+  const [copied, setCopied] = useState(false);
+  // Bumped on each Support so the spring + eagle take-off replay.
+  const [supportFx, setSupportFx] = useState(0);
+
+  function support() {
+    if (!post.liked) setSupportFx((n) => n + 1);
+    onLike(post.id);
+  }
 
   function submitComment() {
     const t = comment.trim();
@@ -803,171 +806,196 @@ export function PostCard({
   }
 
   function doubleTapLike() {
-    if (!post.liked) onLike(post.id);
+    if (!post.liked) {
+      onLike(post.id);
+      setSupportFx((n) => n + 1);
+    }
     setBurst(true);
     setTimeout(() => setBurst(false), 800);
   }
 
+  // Share via the phone's native share sheet; fall back to copying the text.
+  async function share() {
+    const text = `${post.authorName} on Valiant Movement: ${post.text.trim()}`.slice(0, 500);
+    try {
+      if (navigator.share) await navigator.share({ title: "Valiant Movement", text });
+      else {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }
+    } catch {
+      /* share sheet dismissed */
+    }
+  }
+
+  const action =
+    "flex items-center gap-1.5 rounded-full p-2 text-[13px] font-medium tabular-nums transition";
+
+  // Flat, full-width row separated by hairlines (X / WhatsApp style) — no
+  // boxed card, no coloured stripe. Avatar in a left column, content beside it.
   return (
-    <article
-      className="overflow-hidden rounded-2xl border border-[var(--color-line)] bg-white transition hover:shadow-md"
-      style={{ borderLeft: `3px solid ${post.authorColor}` }}
-    >
-      <div className="p-4">
-        {post.pinned && (
-          <div className="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--color-brand-strong)]">
-            <Pin className="h-3.5 w-3.5" /> Pinned by coordinators
-          </div>
-        )}
-        {post.reposted && (
-          <div className="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--color-muted)]">
-            <Repeat2 className="h-3.5 w-3.5" /> You reposted
-          </div>
-        )}
-        <div className="flex items-start gap-3">
-          <Avatar name={post.authorName} color={post.authorColor} photo={post.authorPhoto} size={44} />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="truncate font-bold text-[var(--color-ink)]">{post.authorName}</span>
-              <BadgeCheck className="h-4 w-4 shrink-0 text-[var(--color-brand)]" />
-              <span className="text-[12px] text-[var(--color-faint)]">· {timeAgo(post.at)}</span>
-            </div>
-            {post.community && (
-              <span className="flex items-center gap-1 text-[12px] font-medium text-[var(--color-brand-strong)]">
-                <Globe2 className="h-3 w-3" /> {post.community}
-              </span>
-            )}
-          </div>
-          <button className="grid size-8 shrink-0 place-items-center rounded-full text-[var(--color-faint)] transition hover:bg-[var(--color-surface-2)]">
-            <MoreHorizontal className="h-4 w-4" />
-          </button>
-        </div>
-
-        {post.text && (
-          <p className="mt-2.5 whitespace-pre-wrap text-[15px] leading-relaxed text-[var(--color-ink-soft)]">{post.text.trim()}</p>
-        )}
-      </div>
-
-      {post.image && (
-        <div
-          className="relative -mt-1 select-none overflow-hidden border-y border-[var(--color-line-soft)]"
-          onDoubleClick={doubleTapLike}
-        >
-          <img src={post.image} alt="" className="max-h-[460px] w-full object-cover" />
-          {burst && (
-            <span className="pointer-events-none absolute inset-0 grid place-items-center">
-              <Heart className="animate-pop h-24 w-24 fill-white text-white drop-shadow-lg" />
-            </span>
+    <article className="border-b border-[var(--color-line)] bg-white px-4 pb-1.5 pt-3">
+      {(post.pinned || post.reposted) && (
+        <div className="mb-1 flex items-center gap-1.5 pl-[52px] text-[12.5px] font-semibold text-[var(--color-muted)]">
+          {post.pinned ? (
+            <>
+              <Pin className="h-3.5 w-3.5 text-[var(--color-brand-strong)]" /> Pinned by coordinators
+            </>
+          ) : (
+            <>
+              <Repeat2 className="h-3.5 w-3.5" /> You reposted
+            </>
           )}
         </div>
       )}
+      <div className="flex gap-3">
+        <Avatar name={post.authorName} color={post.authorColor} photo={post.authorPhoto} size={40} />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1 text-[15px] leading-5">
+            <span className="truncate font-bold text-[var(--color-ink)]">{post.authorName}</span>
+            <BadgeCheck className="h-4 w-4 shrink-0 text-[var(--color-brand)]" aria-label="Verified member" />
+            <span className="shrink-0 text-[14px] text-[var(--color-faint)]">· {timeAgo(post.at)}</span>
+          </div>
+          {post.community && (
+            <div className="truncate text-[12.5px] text-[var(--color-muted)]">{post.community}</div>
+          )}
 
-      <div className="px-4 pb-4 pt-3">
-        {/* like count line */}
-        {post.likes > 0 && (
-          <button
-            onClick={() => setShowLikers(true)}
-            className="mb-1.5 text-[13px] font-semibold text-[var(--color-ink)] hover:underline"
-          >
-            {fmt(post.likes)} {post.likes === 1 ? "person supports" : "people support"} this
-          </button>
-        )}
+          {post.text && (
+            <p className="mt-1 whitespace-pre-wrap break-words text-[15px] leading-[1.45] text-[var(--color-ink)]">
+              {post.text.trim()}
+            </p>
+          )}
 
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onLike(post.id)}
-            className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] font-semibold transition ${
-              post.liked ? "bg-[var(--color-danger)]/10 text-[var(--color-danger)]" : "text-[var(--color-muted)] hover:bg-[var(--color-danger)]/8 hover:text-[var(--color-danger)]"
-            }`}
-          >
-            <Heart className={`h-[17px] w-[17px] ${post.liked ? "fill-current" : ""}`} /> {fmt(post.likes)}
-          </button>
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className="flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] font-semibold text-[var(--color-muted)] transition hover:bg-[#0ea5e9]/8 hover:text-[#0ea5e9]"
-          >
-            <MessageCircle className="h-[17px] w-[17px]" /> {fmt(post.comments.length)}
-          </button>
-          <button
-            onClick={() => onRepost(post.id)}
-            className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] font-semibold transition ${
-              post.reposted ? "bg-[var(--color-green)]/10 text-[var(--color-green)]" : "text-[var(--color-muted)] hover:bg-[var(--color-green)]/8 hover:text-[var(--color-green)]"
-            }`}
-          >
-            <Repeat2 className="h-[17px] w-[17px]" /> {fmt(post.reposts)}
-          </button>
-          <div className="flex-1" />
-          <button
-            onClick={() => onBookmark(post.id)}
-            title={post.bookmarked ? "Saved — tap to remove" : "Save to bookmarks"}
-            aria-pressed={post.bookmarked}
-            className={`grid size-8 place-items-center rounded-full transition ${
-              post.bookmarked
-                ? "bg-[var(--color-brand)]/10 text-[var(--color-brand-strong)]"
-                : "text-[var(--color-muted)] hover:bg-[var(--color-brand)]/8 hover:text-[var(--color-brand-strong)]"
-            }`}
-          >
-            <Bookmark className={`h-[17px] w-[17px] ${post.bookmarked ? "fill-current" : ""}`} />
-          </button>
-          <button className="grid size-8 place-items-center rounded-full text-[var(--color-muted)] transition hover:bg-[var(--color-surface-2)]">
-            <Share2 className="h-[17px] w-[17px]" />
-          </button>
-        </div>
+          {post.image && (
+            <div
+              className="relative mt-2.5 select-none overflow-hidden rounded-2xl border border-[var(--color-line)]"
+              onDoubleClick={doubleTapLike}
+            >
+              <img src={post.image} alt="" className="max-h-[520px] w-full object-cover" />
+              {burst && (
+                <span className="pointer-events-none absolute inset-0 grid place-items-center">
+                  <span className="animate-soar text-[88px] drop-shadow-[0_6px_18px_rgba(0,0,0,0.35)]">🦅</span>
+                </span>
+              )}
+            </div>
+          )}
 
-        {/* Comments */}
-        {(open || post.comments.length > 0) && (
-          <div className="mt-3 border-t border-[var(--color-line-soft)] pt-3">
-            <div className="space-y-2.5">
+          {/* Actions — evenly spaced, quiet until used */}
+          <div className="-ml-2 mt-1 flex max-w-[440px] items-center justify-between text-[var(--color-muted)]">
+            <button
+              onClick={() => setOpen((v) => !v)}
+              aria-label="Comments"
+              className={`${action} hover:text-[#0ea5e9]`}
+            >
+              <MessageCircle className="h-[18px] w-[18px]" />
+              {post.comments.length > 0 && fmt(post.comments.length)}
+            </button>
+            <button
+              onClick={() => onRepost(post.id)}
+              aria-label="Repost"
+              aria-pressed={post.reposted}
+              className={`${action} ${post.reposted ? "text-[var(--color-green)]" : "hover:text-[var(--color-green)]"}`}
+            >
+              <Repeat2 className="h-[18px] w-[18px]" />
+              {post.reposts > 0 && fmt(post.reposts)}
+            </button>
+            <span className="flex items-center">
+              <button
+                onClick={support}
+                aria-label={post.liked ? "Remove support" : "Support"}
+                aria-pressed={post.liked}
+                title="Support"
+                className={`${action} relative ${post.liked ? "text-[var(--color-brand-strong)]" : "hover:text-[var(--color-brand-strong)]"}`}
+              >
+                <Heart
+                  key={supportFx}
+                  className={`h-[18px] w-[18px] ${post.liked ? "fill-current" : ""} ${supportFx ? "animate-support" : ""}`}
+                />
+                {supportFx > 0 && (
+                  <span key={`fx${supportFx}`} aria-hidden className="animate-takeoff pointer-events-none absolute left-1.5 top-0 text-[15px]">
+                    🦅
+                  </span>
+                )}
+              </button>
+              {post.likes > 0 && (
+                <button
+                  onClick={() => setShowLikers(true)}
+                  aria-label="See who supports this"
+                  className={`-ml-1.5 pr-1 text-[13px] font-medium tabular-nums hover:underline ${
+                    post.liked ? "text-[var(--color-brand-strong)]" : ""
+                  }`}
+                >
+                  {fmt(post.likes)}
+                </button>
+              )}
+            </span>
+            <button
+              onClick={() => onBookmark(post.id)}
+              aria-label={post.bookmarked ? "Remove bookmark" : "Bookmark"}
+              aria-pressed={post.bookmarked}
+              className={`${action} ${post.bookmarked ? "text-[var(--color-brand-strong)]" : "hover:text-[var(--color-brand-strong)]"}`}
+            >
+              <Bookmark className={`h-[18px] w-[18px] ${post.bookmarked ? "fill-current" : ""}`} />
+            </button>
+            <button onClick={share} aria-label="Share" className={`${action} hover:text-[var(--color-ink)]`}>
+              {copied ? <Check className="h-[18px] w-[18px] text-[var(--color-green)]" /> : <Share2 className="h-[18px] w-[18px]" />}
+            </button>
+          </div>
+
+          {/* Comments — only when opened, so the feed stays a clean list */}
+          {open && (
+            <div className="mb-2 mt-1 space-y-2.5 border-t border-[var(--color-line-soft)] pt-3">
               {post.comments.map((c) => (
                 <div key={c.id} className="flex gap-2.5">
-                  <Avatar name={c.authorName} color={c.authorColor} photo={c.authorPhoto} size={30} />
+                  <Avatar name={c.authorName} color={c.authorColor} photo={c.authorPhoto} size={28} />
                   <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-[var(--color-surface-2)] px-3 py-2">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[13px] font-bold text-[var(--color-ink)]">{c.authorName}</span>
-                      <span className="text-[10px] text-[var(--color-faint)]">{timeAgo(c.at)}</span>
+                      <span className="text-[11px] text-[var(--color-faint)]">{timeAgo(c.at)}</span>
                     </div>
-                    <p className="text-[13.5px] leading-relaxed text-[var(--color-ink-soft)]">{c.text}</p>
+                    <p className="break-words text-[14px] leading-snug text-[var(--color-ink-soft)]">{c.text}</p>
                   </div>
                 </div>
               ))}
-            </div>
 
-            <div className="mt-2.5 flex items-center gap-2">
-              <Avatar name={me.name} color="#e07400" photo={me.avatar} size={30} />
-              <div className="relative flex flex-1 items-center rounded-full border border-[var(--color-line)] bg-[var(--color-surface-2)] pr-1 transition focus-within:border-[var(--color-brand)] focus-within:bg-white">
-                <input
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitComment(); } }}
-                  placeholder="Write a comment…"
-                  className="h-9 min-w-0 flex-1 rounded-full bg-transparent px-3.5 text-[13.5px] outline-none"
-                />
-                <button
-                  onClick={() => setShowEmoji((v) => !v)}
-                  title="Add emoji"
-                  className={`grid size-8 shrink-0 place-items-center rounded-full transition hover:text-[var(--color-brand-strong)] ${showEmoji ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"}`}
-                >
-                  <Smile className="h-[18px] w-[18px]" />
-                </button>
-                {showEmoji && (
-                  <EmojiPicker
-                    onPick={(e) => setComment((c) => c + e)}
-                    onClose={() => setShowEmoji(false)}
-                    className="left-auto right-0"
+              <div className="flex items-center gap-2">
+                <div className="relative flex flex-1 items-center rounded-full bg-[var(--color-surface-2)] pr-1 ring-1 ring-transparent transition focus-within:bg-white focus-within:ring-[var(--color-brand)]">
+                  <input
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitComment(); } }}
+                    placeholder="Add a comment…"
+                    aria-label="Add a comment"
+                    className="h-10 min-w-0 flex-1 rounded-full bg-transparent px-4 text-[14px] outline-none"
                   />
-                )}
+                  <button
+                    onClick={() => setShowEmoji((v) => !v)}
+                    aria-label="Add emoji"
+                    className={`grid size-8 shrink-0 place-items-center rounded-full transition hover:text-[var(--color-brand-strong)] ${showEmoji ? "text-[var(--color-brand-strong)]" : "text-[var(--color-muted)]"}`}
+                  >
+                    <Smile className="h-[18px] w-[18px]" />
+                  </button>
+                  {showEmoji && (
+                    <EmojiPicker
+                      onPick={(e) => setComment((c) => c + e)}
+                      onClose={() => setShowEmoji(false)}
+                      className="left-auto right-0"
+                    />
+                  )}
+                </div>
+                <button
+                  onClick={submitComment}
+                  disabled={!comment.trim()}
+                  aria-label="Send comment"
+                  className="grid size-10 shrink-0 place-items-center rounded-full bg-[var(--color-brand)] text-white transition enabled:hover:brightness-105 disabled:opacity-40"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
               </div>
-              <button
-                onClick={submitComment}
-                disabled={!comment.trim()}
-                className="grid size-9 shrink-0 place-items-center rounded-full gradient-brand text-white transition enabled:hover:opacity-95 disabled:opacity-40"
-              >
-                <Send className="h-4 w-4" />
-              </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
       {showLikers && <LikersModal postId={post.id} onClose={() => setShowLikers(false)} />}
     </article>

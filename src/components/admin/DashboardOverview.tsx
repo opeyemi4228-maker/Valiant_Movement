@@ -20,6 +20,7 @@ import { getAdminMembers, exportAdminMembersCsv, type AdminMemberRow } from "@/a
 import type { AdminRole } from "@/data/admin-roles";
 import { ActivityDashboard } from "./ActivityDashboard";
 import { CallRoom, type CallConfig } from "@/components/call/CallRoom";
+import { ValiantLoader } from "@/components/ui/valiant";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const ROLE_LABEL: Record<NonNullable<AdminMemberRow["communityRole"]>, string> = {
@@ -151,7 +152,7 @@ export function DashboardOverview({
   if (state === "loading") {
     return (
       <div className="grid h-64 place-items-center">
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--color-brand)]" />
+        <ValiantLoader />
       </div>
     );
   }

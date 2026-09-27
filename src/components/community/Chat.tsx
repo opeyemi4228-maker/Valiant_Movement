@@ -372,7 +372,7 @@ export function Chat() {
       {/* ================================ Thread ================================ */}
       <div
         className={`relative h-full min-w-0 flex-1 flex-col ${showThread ? "flex" : "hidden md:flex"}`}
-        style={{ backgroundColor: "#f3ede4" }}
+        style={{ backgroundColor: "var(--color-bg)" }}
       >
         {/* subtle pattern overlay */}
         <div
@@ -592,7 +592,7 @@ function Bubble({ m, grouped }: { m: ChatMessage; grouped: boolean }) {
         className={`relative max-w-[80%] rounded-2xl p-1.5 text-[14.5px] leading-relaxed shadow-sm ${
           m.fromMe
             ? "rounded-br-md bg-[var(--color-brand-tint)] text-[var(--color-ink)]"
-            : "rounded-bl-md bg-white text-[var(--color-ink)]"
+            : "rounded-bl-md bg-[var(--color-line-soft)] text-[var(--color-ink)]"
         }`}
       >
         {/* Image */}
