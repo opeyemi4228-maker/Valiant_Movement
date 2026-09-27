@@ -168,6 +168,23 @@ body {
   animation: vm-fade 0.4s ease both;
 }
 
+/* Welcome collage: photo columns drifting endlessly (the list is doubled,
+   so moving by 50% loops seamlessly) */
+@keyframes vm-drift-up {
+  from { transform: translateY(0); }
+  to { transform: translateY(-50%); }
+}
+@keyframes vm-drift-down {
+  from { transform: translateY(-50%); }
+  to { transform: translateY(0); }
+}
+.animate-drift-up {
+  animation: vm-drift-up 60s linear infinite;
+}
+.animate-drift-down {
+  animation: vm-drift-down 70s linear infinite;
+}
+
 /* Chat wallpaper — a warm Valiant wash with faint orange dots */
 .chat-wall {
   background-color: #fcf8f3;
